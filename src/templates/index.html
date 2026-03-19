@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chairvana</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Chivo:wght@400;500;700&family=Fraunces:opsz,wght@9..144,600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <div class="backdrop"></div>
+    <main class="layout">
+      <header class="topbar">
+        <div>
+          <h1>Chairvana</h1>
+          <p>Program committee intelligence with fast inline editing.</p>
+        </div>
+        <div class="meta">
+          <span>{{ people | length }} people loaded</span>
+        </div>
+      </header>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      <section class="alerts" aria-label="alerts">
+        {% for category, message in messages %}
+        <div class="alert {{ category }}">{{ message }}</div>
+        {% endfor %}
+      </section>
+      {% endif %}
+      {% endwith %}
+
+      <section class="content">
+        <aside class="panel list-panel">
+          <form method="get" action="{{ url_for('index') }}" class="search">
+            <label for="q">Search by name or affiliation</label>
+            <input id="q" name="q" value="{{ query }}" placeholder="e.g., Munich" />
+            <button type="submit">Filter</button>
+          </form>
+
+          <ul class="person-list">
+            {% for person in people %}
+            <li>
+              <a
+                href="{{ url_for('index', q=query, selected=person['name']) }}"
+                class="person-link {% if selected_person and selected_person['name'] == person['name'] %}active{% endif %}"
+              >
+                <strong>{{ person['name'] }}</strong>
+                <span>{{ person.get('affiliation', 'Unknown affiliation') }}</span>
+              </a>
+            </li>
+            {% endfor %}
+            {% if not people %}
+            <li class="empty">No people match your search.</li>
+            {% endif %}
+          </ul>
+        </aside>
+
+        <section class="panel edit-panel">
+          {% if selected_person %}
+          <h2>Edit Person</h2>
+          <form method="post" action="{{ url_for('update_person') }}" class="editor">
+            <input type="hidden" name="original_name" value="{{ selected_person['name'] }}" />
+            <input type="hidden" name="q" value="{{ query }}" />
+
+            <label for="name">Name</label>
+            <input id="name" name="name" value="{{ selected_person['name'] }}" required />
+
+            <label for="affiliation">Affiliation</label>
+            <input
+              id="affiliation"
+              name="affiliation"
+              value="{{ selected_person.get('affiliation', '') }}"
+            />
+
+            <dl class="details">
+              <dt>Known affiliations</dt>
+              <dd>{{ selected_person.get('affiliations', []) | join(', ') }}</dd>
+              <dt>PC memberships</dt>
+              <dd>
+                {% if selected_person.get('pc_memberships') %}
+                {% for m in selected_person.get('pc_memberships', []) %}
+                <span class="tag">{{ m.get('conference', '?') }} {{ m.get('year', '?') }}</span>
+                {% endfor %}
+                {% else %}
+                None
+                {% endif %}
+              </dd>
+            </dl>
+
+            <button type="submit" class="primary">Save changes</button>
+          </form>
+          {% else %}
+          <p>Select a person to edit.</p>
+          {% endif %}
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

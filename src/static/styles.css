@@ -1,0 +1,244 @@
+:root {
+  --bg-1: #f6f1e9;
+  --bg-2: #efe3cf;
+  --ink: #1f1f19;
+  --panel: rgba(255, 250, 240, 0.9);
+  --panel-border: rgba(84, 62, 44, 0.22);
+  --accent: #0e6a61;
+  --accent-soft: #c9ebe6;
+  --danger: #8f2d2d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Chivo", "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: linear-gradient(130deg, var(--bg-1), var(--bg-2));
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 15% 20%, rgba(14, 106, 97, 0.18), transparent 30%),
+    radial-gradient(circle at 80% 0%, rgba(170, 95, 30, 0.16), transparent 27%);
+}
+
+.layout {
+  position: relative;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1rem;
+  margin-bottom: 1.3rem;
+}
+
+h1,
+h2 {
+  font-family: "Fraunces", Georgia, serif;
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(2rem, 4vw, 3rem);
+}
+
+h2 {
+  font-size: 1.6rem;
+  margin-bottom: 0.9rem;
+}
+
+.topbar p {
+  margin: 0.4rem 0 0;
+  opacity: 0.85;
+}
+
+.meta {
+  font-size: 0.95rem;
+  background: rgba(255, 255, 255, 0.45);
+  border: 1px solid var(--panel-border);
+  padding: 0.45rem 0.7rem;
+  border-radius: 999px;
+}
+
+.alerts {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.alert {
+  border-radius: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.95rem;
+  border: 1px solid var(--panel-border);
+}
+
+.alert.success {
+  background: var(--accent-soft);
+  border-color: rgba(14, 106, 97, 0.35);
+}
+
+.alert.error {
+  background: #f5dada;
+  border-color: rgba(143, 45, 45, 0.4);
+  color: var(--danger);
+}
+
+.content {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 1rem;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 1rem;
+  box-shadow: 0 12px 30px rgba(55, 38, 22, 0.08);
+  padding: 1rem;
+  animation: rise 420ms ease;
+}
+
+@keyframes rise {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.search {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 0.9rem;
+}
+
+label {
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+input,
+button {
+  font: inherit;
+}
+
+input {
+  border: 1px solid var(--panel-border);
+  border-radius: 0.6rem;
+  padding: 0.58rem 0.65rem;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+button {
+  border: 1px solid transparent;
+  border-radius: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  cursor: pointer;
+  transition: transform 120ms ease, filter 120ms ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.03);
+}
+
+.search button,
+.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.person-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 62vh;
+  overflow: auto;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.person-link {
+  display: grid;
+  gap: 0.2rem;
+  text-decoration: none;
+  color: inherit;
+  border: 1px solid transparent;
+  padding: 0.6rem 0.62rem;
+  border-radius: 0.6rem;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.person-link span {
+  font-size: 0.88rem;
+  opacity: 0.8;
+}
+
+.person-link.active {
+  border-color: rgba(14, 106, 97, 0.5);
+  background: rgba(201, 235, 230, 0.65);
+}
+
+.editor {
+  display: grid;
+  gap: 0.52rem;
+}
+
+.details {
+  margin: 0.35rem 0 0.75rem;
+  padding: 0.65rem;
+  border: 1px dashed rgba(84, 62, 44, 0.3);
+  border-radius: 0.6rem;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.details dt {
+  font-size: 0.82rem;
+  font-weight: 700;
+  opacity: 0.7;
+}
+
+.details dd {
+  margin: 0.1rem 0 0.45rem;
+}
+
+.tag {
+  display: inline-block;
+  margin: 0.15rem 0.3rem 0.15rem 0;
+  padding: 0.22rem 0.44rem;
+  border-radius: 999px;
+  font-size: 0.77rem;
+  background: rgba(30, 30, 30, 0.08);
+}
+
+.empty {
+  opacity: 0.75;
+  padding: 0.5rem;
+}
+
+@media (max-width: 900px) {
+  .content {
+    grid-template-columns: 1fr;
+  }
+
+  .person-list {
+    max-height: 35vh;
+  }
+}

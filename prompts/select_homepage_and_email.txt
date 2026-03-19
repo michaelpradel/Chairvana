@@ -1,0 +1,16 @@
+You are identifying contact information for a software engineering researcher.
+
+Given the person's name below, use web search to find:
+1) the person's personal academic homepage (preferred) or personal profile page,
+2) the person's email address.
+
+Requirements:
+- Use web search.
+- Inspect multiple candidate pages and prefer reliable sources (personal homepage, university profile, lab profile).
+- Return exactly one homepage URL and one email.
+- If the email is obfuscated (for example, "name -at- university dot edu"), convert it into a normal email format.
+- Return only JSON that matches the required schema.
+- Do not include markdown, explanations, or extra keys.
+
+Person:
+{person}

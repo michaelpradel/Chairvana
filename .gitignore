@@ -1,0 +1,5 @@
+data/*
+.openai_token
+.openai_token_cispa
+.openai_token_michael
+__pycache__*
