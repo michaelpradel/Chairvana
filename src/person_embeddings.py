@@ -21,24 +21,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Sequence
 
-from openai import OpenAI
+from llm_queries import get_openai_client
 
 
 DEFAULT_MODEL = "text-embedding-3-small"
 DEFAULT_STORE_PATH = Path(__file__).resolve().parent.parent / "data" / "person_embeddings.json"
-
-
-def load_api_key() -> str:
-    token_path = Path(__file__).resolve().parent.parent / ".openai_token"
-    try:
-        token = token_path.read_text(encoding="utf-8").strip()
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(f"Missing API token file: {token_path}") from exc
-
-    if not token:
-        raise ValueError(f"API token file is empty: {token_path}")
-
-    return token
 
 
 def now_iso() -> str:
@@ -215,7 +202,7 @@ def embed_texts(texts: Sequence[str], model: str = DEFAULT_MODEL, batch_size: in
     if not texts:
         return []
 
-    client = OpenAI(api_key=load_api_key())
+    client = get_openai_client()
     vectors: list[list[float]] = []
 
     for start in range(0, len(texts), batch_size):

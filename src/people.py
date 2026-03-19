@@ -7,13 +7,15 @@ Each person is uniquely identified by the `name` field.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
 
-DEFAULT_PEOPLE_PATH = Path(__file__).resolve().parent.parent / "data" / "people.jsonl"
 DEFAULT_PEOPLE_REPO_DIRNAME = ".people_repo"
+DEFAULT_PEOPLE_REPO_PATH = Path(__file__).resolve().parent.parent / "data" / DEFAULT_PEOPLE_REPO_DIRNAME
+DEFAULT_PEOPLE_PATH = DEFAULT_PEOPLE_REPO_PATH / "people.jsonl"
 
 
 def _merge_values(existing: Any, new_value: Any) -> Any:
@@ -61,6 +63,35 @@ def _extract_latest_pc_year(record: dict[str, Any]) -> int | None:
     return max(years)
 
 
+def _normalize_flags(raw_flags: Any) -> list[str] | None:
+    if raw_flags is None:
+        return None
+
+    tokens: list[str] = []
+    if isinstance(raw_flags, str):
+        tokens = [token.strip() for token in re.split(r"[,\s]+", raw_flags) if token.strip()]
+    elif isinstance(raw_flags, list):
+        tokens = [str(token).strip() for token in raw_flags if str(token).strip()]
+    else:
+        return None
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        lowered = token.lower()
+        if not lowered.startswith("#"):
+            lowered = f"#{lowered}"
+
+        if lowered == "#":
+            continue
+
+        if lowered not in seen:
+            seen.add(lowered)
+            normalized.append(lowered)
+
+    return normalized or None
+
+
 def _merge_person_record(existing: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
     merged = _merge_dict(existing, updates)
 
@@ -76,6 +107,12 @@ def _merge_person_record(existing: dict[str, Any], updates: dict[str, Any]) -> d
         elif existing_year is not None and update_year is not None and update_year < existing_year:
             merged["affiliation"] = existing_aff
 
+    normalized_flags = _normalize_flags(merged.get("flags"))
+    if normalized_flags:
+        merged["flags"] = normalized_flags
+    else:
+        merged.pop("flags", None)
+
     merged.pop("affiliations", None)
     return merged
 
@@ -85,7 +122,12 @@ class PeopleStore:
 
     def __init__(self, path: Path | None = None, repo_dir: Path | None = None) -> None:
         self.path = path or DEFAULT_PEOPLE_PATH
-        self.repo_dir = repo_dir or (self.path.parent / DEFAULT_PEOPLE_REPO_DIRNAME)
+        if repo_dir is not None:
+            self.repo_dir = repo_dir
+        elif self.path.parent.name == DEFAULT_PEOPLE_REPO_DIRNAME:
+            self.repo_dir = self.path.parent
+        else:
+            self.repo_dir = self.path.parent / DEFAULT_PEOPLE_REPO_DIRNAME
 
     def load(self) -> dict[str, dict[str, Any]]:
         people: dict[str, dict[str, Any]] = {}
@@ -109,7 +151,10 @@ class PeopleStore:
                 normalized_name = name.strip()
                 existing = people.get(normalized_name)
                 if existing is None:
-                    people[normalized_name] = {"name": normalized_name, **record}
+                    people[normalized_name] = _merge_person_record(
+                        {},
+                        {"name": normalized_name, **record},
+                    )
                 else:
                     people[normalized_name] = _merge_person_record(
                         existing,
@@ -191,6 +236,13 @@ class PeopleStore:
         if isinstance(affiliation, str):
             normalized_affiliation = affiliation.strip()
             updated["affiliation"] = normalized_affiliation
+
+        normalized_flags = _normalize_flags(updated.get("flags"))
+        if normalized_flags:
+            updated["flags"] = normalized_flags
+        else:
+            updated.pop("flags", None)
+
         updated.pop("affiliations", None)
 
         if normalized_new_name != normalized_original_name and normalized_new_name in people:
@@ -201,6 +253,82 @@ class PeopleStore:
 
         self._write_all(people)
         return updated
+
+    def replace_person(self, original_name: str, replacement: dict[str, Any]) -> dict[str, Any]:
+        normalized_original_name = original_name.strip()
+        if not normalized_original_name:
+            raise ValueError("original_name must be non-empty")
+
+        people = self.load()
+        if normalized_original_name not in people:
+            raise ValueError(f"No person found with name: {normalized_original_name}")
+
+        normalized = self._normalize_person_record(replacement)
+        new_name = normalized["name"]
+        if new_name != normalized_original_name and new_name in people:
+            raise ValueError(f"A person with name '{new_name}' already exists")
+
+        del people[normalized_original_name]
+        people[new_name] = normalized
+
+        self._write_all(people)
+        return normalized
+
+    def replace_many(self, replacements: Iterable[dict[str, Any]]) -> tuple[int, int]:
+        people = self.load()
+        replaced = 0
+        renamed = 0
+
+        for replacement in replacements:
+            normalized = self._normalize_person_record(replacement)
+            target_name = normalized["name"]
+
+            if target_name in people:
+                people[target_name] = normalized
+                replaced += 1
+                continue
+
+            original_name = replacement.get("original_name")
+            if not isinstance(original_name, str) or not original_name.strip():
+                raise ValueError(
+                    "Replacement for a renamed person must include a non-empty 'original_name'"
+                )
+
+            normalized_original_name = original_name.strip()
+            if normalized_original_name not in people:
+                raise ValueError(f"No person found with name: {normalized_original_name}")
+            if target_name in people and target_name != normalized_original_name:
+                raise ValueError(f"A person with name '{target_name}' already exists")
+
+            del people[normalized_original_name]
+            people[target_name] = normalized
+            replaced += 1
+            renamed += 1
+
+        self._write_all(people)
+        return replaced, renamed
+
+    def _normalize_person_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(record)
+
+        name = normalized.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("Record must contain a non-empty 'name'")
+        normalized["name"] = name.strip()
+
+        affiliation = normalized.get("affiliation")
+        if isinstance(affiliation, str):
+            normalized["affiliation"] = affiliation.strip()
+
+        normalized_flags = _normalize_flags(normalized.get("flags"))
+        if normalized_flags:
+            normalized["flags"] = normalized_flags
+        else:
+            normalized.pop("flags", None)
+
+        normalized.pop("affiliations", None)
+        normalized.pop("original_name", None)
+        return normalized
 
     def _write_all(self, people: dict[str, dict[str, Any]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -218,7 +346,7 @@ class PeopleStore:
         command = [
             "git",
             f"--git-dir={self.repo_dir / '.git'}",
-            f"--work-tree={self.path.parent}",
+            f"--work-tree={self.repo_dir}",
             *args,
         ]
         return subprocess.run(command, capture_output=True, text=True, check=check)
@@ -237,6 +365,11 @@ class PeopleStore:
         self._ensure_local_repo()
 
         people_filename = self.path.name
+        if self.path.parent != self.repo_dir:
+            raise ValueError(
+                f"People file path must be inside repository work tree {self.repo_dir}, got {self.path}"
+            )
+
         self._git("add", "--", people_filename)
 
         diff_status = self._git("diff", "--cached", "--quiet", "--", people_filename, check=False)

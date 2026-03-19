@@ -1,0 +1,20 @@
+You are finding the researchr.org page for the Program Committee of the MAIN research track of a specific academic conference.
+
+Conference: {conference}
+Year: {year}
+
+Use web search to locate the correct page on researchr.org. The target is the MAIN (also called "technical papers" or "research papers") track only.
+
+Do NOT select pages for:
+- workshops or co-located events
+- tool demonstrations or posters
+- doctoral symposia or student research competitions
+- industry tracks, experience reports, or any other non-main track
+- the general conference landing page (only accept a page that lists Program Committee members)
+
+Requirements:
+- Use web search targeting researchr.org.
+- Inspect the top candidate pages to confirm the page lists PC members for the main research track.
+- Pick exactly 1 URL as the best match.
+- Return only JSON that matches the required schema.
+- Do not include markdown, explanations, or any extra keys.

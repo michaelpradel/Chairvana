@@ -1,8 +1,8 @@
-"""Query DBLP XML dump for publications by author.
+"""Preprocess and query a reduced DBLP JSONL snapshot.
 
-This script reads ``data/dblp.xml.gz`` and configures XML parsing with the
-repository's ``data/dblp.dtd`` file. It provides a reusable function to return
-all publications for a specific author and a small CLI for interactive use.
+This module supports two operations:
+1. One-time preprocessing from ``data/dblp.xml.gz`` to ``data/dblp_filtered.jsonl``.
+2. Querying publications by author from the filtered JSONL only.
 """
 
 from __future__ import annotations
@@ -19,21 +19,14 @@ from xml.sax import handler, make_parser
 from xml.sax.handler import feature_external_ges
 from xml.sax.xmlreader import AttributesImpl, InputSource
 
-
-class StopParsing(Exception):
-    """Raised to stop SAX parsing early when enough matches are found."""
-
-
-PUBLICATION_TAGS = {
-    "article",
-    "inproceedings",
-    "proceedings",
-    "book",
-    "incollection",
-    "phdthesis",
-    "mastersthesis",
-    "www",
-}
+TARGET_PUBLICATION_TAGS = {"article", "inproceedings"}
+TARGET_VENUE_PREFIXES = (
+    "conf/icse",
+    "conf/sigsoft",
+    "conf/kbse",
+    "conf/issta",
+    "conf/oopsla",
+)
 
 
 @dataclass(slots=True)
@@ -60,27 +53,63 @@ class LocalDtdResolver(handler.EntityResolver):
         return systemId
 
 
-class DblpAuthorHandler(handler.ContentHandler):
+def build_publication(data: dict[str, object]) -> Publication:
+    venue = None
+    for key in ("journal", "booktitle", "school", "publisher"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            venue = value
+            break
+
+    key_value = data.get("key")
+    title_value = data.get("title")
+    year_value = data.get("year")
+    authors_value = data.get("authors")
+
+    return Publication(
+        pub_type=str(data["pub_type"]),
+        key=key_value if isinstance(key_value, str) else None,
+        title=title_value if isinstance(title_value, str) else None,
+        year=year_value if isinstance(year_value, int) else None,
+        venue=venue,
+        authors=[author for author in authors_value if isinstance(author, str)]
+        if isinstance(authors_value, list)
+        else [],
+    )
+
+
+def _matches_target_venue(publication: Publication) -> bool:
+    """Return True if publication belongs to one of the selected venues."""
+    if publication.key:
+        normalized_key = publication.key.lower()
+        for prefix in TARGET_VENUE_PREFIXES:
+            if normalized_key == prefix or normalized_key.startswith(f"{prefix}/"):
+                return True
+
+    # Optional fallback to cover preprocessed records without DBLP keys.
+    if publication.venue:
+        normalized_venue = publication.venue.lower()
+        return any(normalized_venue == prefix for prefix in TARGET_VENUE_PREFIXES)
+
+    return False
+
+
+class DblpFilterHandler(handler.ContentHandler):
+    """Stream DBLP XML and emit filtered publications as JSONL."""
+
     text_fields = {"author", "title", "year", "journal", "booktitle", "school", "publisher"}
 
-    def __init__(
-        self,
-        target_authors: set[str] | None = None,
-        max_results_per_author: int | None = None,
-        index_all_authors: bool = False,
-    ) -> None:
+    def __init__(self, output_file) -> None:
         super().__init__()
-        self.target_authors = {normalize_whitespace(author) for author in target_authors or set()}
-        self.max_results_per_author = max_results_per_author
-        self.index_all_authors = index_all_authors
-        self.matches_by_author: DefaultDict[str, list[Publication]] = defaultdict(list)
+        self.output_file = output_file
         self.current_pub: dict[str, object] | None = None
         self.current_field: str | None = None
         self.current_text: list[str] = []
-        self.total_matches = 0
+        self.total_publications = 0
+        self.kept_publications = 0
 
     def startElement(self, name: str, attrs: AttributesImpl) -> None:
-        if self.current_pub is None and name in PUBLICATION_TAGS:
+        if self.current_pub is None and name in TARGET_PUBLICATION_TAGS:
             key_value = attrs.get("key")
             self.current_pub = {
                 "pub_type": name,
@@ -119,124 +148,113 @@ class DblpAuthorHandler(handler.ContentHandler):
             self.current_field = None
             self.current_text = []
 
-        if self.current_pub is not None and name in PUBLICATION_TAGS:
-            publication = self._build_publication(self.current_pub)
-
-            if self.index_all_authors:
-                for author in publication.authors:
-                    self.matches_by_author[author].append(publication)
-                self.total_matches += len(publication.authors)
-            else:
-                for author in publication.authors:
-                    if author not in self.target_authors:
-                        continue
-                    bucket = self.matches_by_author[author]
-                    if self.max_results_per_author is None or len(bucket) < self.max_results_per_author:
-                        bucket.append(publication)
-                        self.total_matches += 1
-
-                # Optional early-stop when each requested author reached target count.
-                if self.target_authors and self.max_results_per_author is not None:
-                    done = all(
-                        len(self.matches_by_author[author]) >= self.max_results_per_author
-                        for author in self.target_authors
-                    )
-                    if done:
-                        raise StopParsing()
-
+        if self.current_pub is not None and name in TARGET_PUBLICATION_TAGS:
+            self.total_publications += 1
+            publication = build_publication(self.current_pub)
+            if _matches_target_venue(publication):
+                self.output_file.write(json.dumps(asdict(publication), ensure_ascii=False) + "\n")
+                self.kept_publications += 1
             self.current_pub = None
 
-    def _build_publication(self, data: dict[str, object]) -> Publication:
-        venue = None
-        for key in ("journal", "booktitle", "school", "publisher"):
-            value = data.get(key)
-            if isinstance(value, str) and value:
-                venue = value
-                break
 
-        key_value = data.get("key")
-        title_value = data.get("title")
-        year_value = data.get("year")
-        authors_value = data.get("authors")
+def preprocess_dblp_to_jsonl(
+    xml_gz_path: Path,
+    dtd_path: Path,
+    output_jsonl_path: Path,
+) -> tuple[int, int, float]:
+    """Create a filtered JSONL snapshot from the DBLP XML dump.
 
-        return Publication(
-            pub_type=str(data["pub_type"]),
-            key=key_value if isinstance(key_value, str) else None,
-            title=title_value if isinstance(title_value, str) else None,
-            year=year_value if isinstance(year_value, int) else None,
-            venue=venue,
-            authors=[author for author in authors_value if isinstance(author, str)]
-            if isinstance(authors_value, list)
-            else [],
-        )
+    Keeps only:
+    - publication types: article, inproceedings
+    - venues keyed under conf/icse, conf/sigsoft, conf/kbse, conf/issta, conf/oopsla
+    """
+    if not xml_gz_path.exists():
+        raise FileNotFoundError(f"Missing DBLP dump: {xml_gz_path}")
+    if not dtd_path.exists():
+        raise FileNotFoundError(f"Missing DTD file: {dtd_path}")
+
+    output_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    started = time.perf_counter()
+
+    sax_parser = make_parser()
+    sax_parser.setFeature(feature_external_ges, True)
+    sax_parser.setEntityResolver(LocalDtdResolver(dtd_path))
+
+    with output_jsonl_path.open("w", encoding="utf-8") as output_file:
+        content_handler = DblpFilterHandler(output_file)
+        sax_parser.setContentHandler(content_handler)
+
+        with gzip.open(xml_gz_path, "rb") as xml_file:
+            source = InputSource()
+            source.setByteStream(xml_file)
+            source.setSystemId(str(xml_gz_path))
+            sax_parser.parse(source)
+
+    elapsed = time.perf_counter() - started
+    return content_handler.total_publications, content_handler.kept_publications, elapsed
 
 
 class DblpQueryEngine:
-    """Query DBLP publications with optional one-time index construction.
-
-    Without preloading, each query scans the XML once.
-    With ``preload_index=True``, the constructor performs one full scan and
-    subsequent queries are in-memory lookups.
-    """
+    """Query publications by author from filtered DBLP JSONL."""
 
     def __init__(
         self,
-        xml_gz_path: Path | str | None = None,
-        dtd_path: Path | str | None = None,
+        filtered_jsonl_path: Path | str | None = None,
         preload_index: bool = False,
     ) -> None:
         base_dir = Path(__file__).resolve().parent.parent
-        self.xml_path = (
-            Path(xml_gz_path) if xml_gz_path is not None else base_dir / "data" / "dblp.xml.gz"
+        self.filtered_jsonl_path = (
+            Path(filtered_jsonl_path)
+            if filtered_jsonl_path is not None
+            else base_dir / "data" / "dblp_filtered.jsonl"
         )
-        self.dtd_file = Path(dtd_path) if dtd_path is not None else base_dir / "data" / "dblp.dtd"
-
-        if not self.xml_path.exists():
-            raise FileNotFoundError(f"Missing DBLP dump: {self.xml_path}")
-        if not self.dtd_file.exists():
-            raise FileNotFoundError(f"Missing DTD file: {self.dtd_file}")
+        if not self.filtered_jsonl_path.exists():
+            raise FileNotFoundError(f"Missing filtered DBLP JSONL: {self.filtered_jsonl_path}")
 
         self._author_index: dict[str, list[Publication]] | None = None
         self.index_build_seconds: float | None = None
         if preload_index:
             self.build_author_index()
 
-    def _parse_with_handler(self, content_handler: DblpAuthorHandler) -> None:
-        sax_parser = make_parser()
-        sax_parser.setFeature(feature_external_ges, True)
-        sax_parser.setEntityResolver(LocalDtdResolver(self.dtd_file))
-        sax_parser.setContentHandler(content_handler)
-
-        with gzip.open(self.xml_path, "rb") as xml_file:
-            source = InputSource()
-            source.setByteStream(xml_file)
-            source.setSystemId(str(self.xml_path))
-            try:
-                sax_parser.parse(source)
-            except StopParsing:
-                pass
-
     def build_author_index(self, force: bool = False) -> dict[str, list[Publication]]:
-        """Build a full in-memory author->publications index."""
+        """Build a full in-memory author->publications index from filtered JSONL."""
         if self._author_index is not None and not force:
             return self._author_index
 
         started = time.perf_counter()
-        content_handler = DblpAuthorHandler(index_all_authors=True)
-        self._parse_with_handler(content_handler)
-        self._author_index = dict(content_handler.matches_by_author)
+        matches_by_author: DefaultDict[str, list[Publication]] = defaultdict(list)
+
+        with self.filtered_jsonl_path.open("r", encoding="utf-8") as input_file:
+            for line in input_file:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                publication = Publication(
+                    pub_type=str(row.get("pub_type") or ""),
+                    key=row.get("key") if isinstance(row.get("key"), str) else None,
+                    title=row.get("title") if isinstance(row.get("title"), str) else None,
+                    year=row.get("year") if isinstance(row.get("year"), int) else None,
+                    venue=row.get("venue") if isinstance(row.get("venue"), str) else None,
+                    authors=[a for a in row.get("authors", []) if isinstance(a, str)]
+                    if isinstance(row.get("authors"), list)
+                    else [],
+                )
+                for author in publication.authors:
+                    matches_by_author[author].append(publication)
+
+        self._author_index = dict(matches_by_author)
         self.index_build_seconds = time.perf_counter() - started
         return self._author_index
 
     def query_author(self, author_name: str, max_results: int | None = None) -> list[Publication]:
         author_name = normalize_whitespace(author_name)
 
-        if self._author_index is not None:
-            publications = list(self._author_index.get(author_name, []))
-            return publications[:max_results] if max_results is not None else publications
+        if self._author_index is None:
+            self.build_author_index()
 
-        matches = self.query_authors([author_name], max_results_per_author=max_results)
-        return matches.get(author_name, [])
+        publications = list(self._author_index.get(author_name, [])) if self._author_index else []
+        return publications[:max_results] if max_results is not None else publications
 
     def query_authors(
         self,
@@ -245,42 +263,149 @@ class DblpQueryEngine:
     ) -> dict[str, list[Publication]]:
         normalized_authors = [normalize_whitespace(author) for author in author_names]
 
-        if self._author_index is not None:
-            result: dict[str, list[Publication]] = {}
-            for author in normalized_authors:
-                publications = list(self._author_index.get(author, []))
-                if max_results_per_author is not None:
-                    publications = publications[:max_results_per_author]
-                result[author] = publications
+        if self._author_index is None:
+            self.build_author_index()
+
+        result: dict[str, list[Publication]] = {}
+        for author in normalized_authors:
+            publications = list(self._author_index.get(author, [])) if self._author_index else []
+            if max_results_per_author is not None:
+                publications = publications[:max_results_per_author]
+            result[author] = publications
+        return result
+    def query_authors_by_venue(
+        self,
+        venue_prefix: str,
+        min_year: int | None = None,
+        max_year: int | None = None,
+    ) -> dict[str, list[Publication]]:
+        """Find all authors who published in a specific venue within a year range."""
+        if self._author_index is None:
+            self.build_author_index()
+
+        result: dict[str, list[Publication]] = {}
+        author_index = self._author_index
+        if author_index is None:
             return result
 
-        content_handler = DblpAuthorHandler(
-            target_authors=set(normalized_authors),
-            max_results_per_author=max_results_per_author,
-            index_all_authors=False,
-        )
-        self._parse_with_handler(content_handler)
+        normalized_venue = venue_prefix.lower()
 
-        result = {}
-        for author in normalized_authors:
-            result[author] = list(content_handler.matches_by_author.get(author, []))
+        for author, publications in author_index.items():
+            matching = [
+                pub
+                for pub in publications
+                if self._publication_matches_venue(pub, normalized_venue)
+                and self._year_in_range(pub.year, min_year, max_year)
+            ]
+            if matching:
+                result[author] = matching
+
         return result
 
+    def query_prolific_authors_in_target_venues(
+        self,
+        min_publications: int = 5,
+        min_year: int | None = None,
+        max_year: int | None = None,
+    ) -> dict[str, list[Publication]]:
+        """Find authors with multiple publications in target venues within a year range.
+
+        An author is included if they have at least min_publications in any of the
+        TARGET_VENUE_PREFIXES within the specified year range.
+        """
+        if self._author_index is None:
+            self.build_author_index()
+
+        result: dict[str, list[Publication]] = {}
+        author_index = self._author_index
+        if author_index is None:
+            return result
+
+        for author, publications in author_index.items():
+            matching = [
+                pub
+                for pub in publications
+                if any(self._publication_matches_venue(pub, prefix.lower()) for prefix in TARGET_VENUE_PREFIXES)
+                and self._year_in_range(pub.year, min_year, max_year)
+            ]
+            if len(matching) >= min_publications:
+                result[author] = matching
+
+        return result
+
+    @staticmethod
+    def _publication_matches_venue(publication: Publication, normalized_venue_prefix: str) -> bool:
+        """Check if a publication matches a venue prefix."""
+        if publication.key:
+            normalized_key = publication.key.lower()
+            return normalized_key == normalized_venue_prefix or normalized_key.startswith(
+                f"{normalized_venue_prefix}/"
+            )
+        return False
+
+    @staticmethod
+    def _year_in_range(pub_year: int | None, min_year: int | None, max_year: int | None) -> bool:
+        """Check if a publication year falls within the specified range."""
+        if pub_year is None:
+            return min_year is None and max_year is None
+        if min_year is not None and pub_year < min_year:
+            return False
+        if max_year is not None and pub_year > max_year:
+            return False
+        return True
 
 def get_publications_by_author(
     author_name: str,
-    xml_gz_path: Path | str | None = None,
-    dtd_path: Path | str | None = None,
+    filtered_jsonl_path: Path | str | None = None,
     max_results: int | None = None,
 ) -> list[Publication]:
     """Return all publications that include the given author name."""
-    engine = DblpQueryEngine(xml_gz_path=xml_gz_path, dtd_path=dtd_path, preload_index=False)
+    engine = DblpQueryEngine(
+        filtered_jsonl_path=filtered_jsonl_path,
+        preload_index=False,
+    )
     return engine.query_author(author_name, max_results=max_results)
+
+
+def get_authors_by_venue(
+    venue_prefix: str,
+    min_year: int | None = None,
+    max_year: int | None = None,
+    filtered_jsonl_path: Path | str | None = None,
+) -> dict[str, list[Publication]]:
+    """Find all authors who published in a specific venue within a year range."""
+    engine = DblpQueryEngine(
+        filtered_jsonl_path=filtered_jsonl_path,
+        preload_index=False,
+    )
+    return engine.query_authors_by_venue(venue_prefix, min_year, max_year)
+
+
+def get_prolific_authors(
+    min_publications: int = 5,
+    min_year: int | None = None,
+    max_year: int | None = None,
+    filtered_jsonl_path: Path | str | None = None,
+) -> dict[str, list[Publication]]:
+    """Find authors with multiple publications in target venues within a year range.
+
+    Searches across all TARGET_VENUE_PREFIXES for authors with at least
+    min_publications in the specified year range.
+    """
+    engine = DblpQueryEngine(
+        filtered_jsonl_path=filtered_jsonl_path,
+        preload_index=False,
+    )
+    return engine.query_prolific_authors_in_target_venues(min_publications, min_year, max_year)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Query DBLP publications by author")
-    parser.add_argument("author", help='Author name to search, e.g., "Michael Pradel"')
+    parser.add_argument(
+        "author",
+        nargs="?",
+        help='Author name to search, e.g., "Michael Pradel"',
+    )
     parser.add_argument(
         "--xml",
         type=Path,
@@ -294,6 +419,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Optional path to DTD file (default: data/dblp.dtd)",
     )
     parser.add_argument(
+        "--filtered-jsonl",
+        type=Path,
+        default=None,
+        help="Path to filtered DBLP JSONL cache (default: data/dblp_filtered.jsonl)",
+    )
+    parser.add_argument(
+        "--preprocess",
+        action="store_true",
+        help="Run one-time preprocessing from DBLP XML to filtered JSONL and exit",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=10,
@@ -303,26 +439,104 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--max-results",
         type=int,
         default=None,
-        help="Optional early stop after collecting this many matches",
+        help="Maximum number of matches to return per author",
     )
     parser.add_argument(
-        "--preload-index",
+        "--venue",
+        type=str,
+        default=None,
+        help="Query authors who published in a specific venue, e.g., 'conf/icse'",
+    )
+    parser.add_argument(
+        "--prolific",
         action="store_true",
-        help="Build full author index once (faster for repeated queries in one process)",
+        help="Find authors with multiple publications in target venues (use with --year-start and --year-end)",
+    )
+    parser.add_argument(
+        "--year-start",
+        type=int,
+        default=None,
+        help="Start year for filtering publications (inclusive)",
+    )
+    parser.add_argument(
+        "--year-end",
+        type=int,
+        default=None,
+        help="End year for filtering publications (inclusive)",
+    )
+    parser.add_argument(
+        "--min-pubs",
+        type=int,
+        default=5,
+        help="Minimum number of publications for prolific authors query (default: 5)",
     )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    engine = DblpQueryEngine(args.xml, args.dtd, preload_index=args.preload_index)
+
+    base_dir = Path(__file__).resolve().parent.parent
+    xml_path = args.xml if args.xml is not None else base_dir / "data" / "dblp.xml.gz"
+    dtd_path = args.dtd if args.dtd is not None else base_dir / "data" / "dblp.dtd"
+    filtered_jsonl_path = (
+        args.filtered_jsonl if args.filtered_jsonl is not None else base_dir / "data" / "dblp_filtered.jsonl"
+    )
+
+    if args.preprocess:
+        total, kept, elapsed = preprocess_dblp_to_jsonl(xml_path, dtd_path, filtered_jsonl_path)
+        print(f"Preprocessed DBLP in {elapsed:.2f}s")
+        print(f"Scanned target publication tags: {total}")
+        print(f"Kept filtered publications: {kept}")
+        print(f"Wrote filtered JSONL: {filtered_jsonl_path}")
+        return 0
+
+    if args.prolific:
+        authors_by_pubs = get_prolific_authors(
+            min_publications=args.min_pubs,
+            min_year=args.year_start,
+            max_year=args.year_end,
+            filtered_jsonl_path=filtered_jsonl_path,
+        )
+        year_range = f"{args.year_start or 'any'}-{args.year_end or 'any'}"
+        print(f"Found {len(authors_by_pubs)} authors with {args.min_pubs}+ publications in target venues ({year_range})")
+        for author in sorted(authors_by_pubs.keys()):
+            pubs = authors_by_pubs[author]
+            print(f"{author}: {len(pubs)} publications")
+            for pub in pubs[: args.limit]:
+                print(f"  - ({pub.year}) {pub.title}")
+        return 0
+
+    if args.venue:
+        authors_by_venue = get_authors_by_venue(
+            venue_prefix=args.venue,
+            min_year=args.year_start,
+            max_year=args.year_end,
+            filtered_jsonl_path=filtered_jsonl_path,
+        )
+        year_range = f"{args.year_start or 'any'}-{args.year_end or 'any'}"
+        print(f"Found {len(authors_by_venue)} authors who published in {args.venue} ({year_range})")
+        for author in sorted(authors_by_venue.keys()):
+            pubs = authors_by_venue[author]
+            print(f"{author}: {len(pubs)} publications")
+            for pub in pubs[: args.limit]:
+                print(f"  - ({pub.year}) {pub.title}")
+        return 0
+
+    if not args.author:
+        raise ValueError("author is required unless --preprocess, --venue, or --prolific is used")
+
+    engine = DblpQueryEngine(
+        filtered_jsonl_path=filtered_jsonl_path,
+        preload_index=True,
+    )
     publications = engine.query_author(args.author, max_results=args.max_results)
 
     print(f"Found {len(publications)} publications for: {args.author}")
     for publication in publications[: args.limit]:
         print(json.dumps(asdict(publication), ensure_ascii=False))
 
-    if args.preload_index and engine.index_build_seconds is not None:
+    if engine.index_build_seconds is not None:
         print(f"Built in-memory author index in {engine.index_build_seconds:.2f}s")
 
     return 0

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import re
-from pathlib import Path
 from typing import Sequence
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
@@ -20,7 +19,7 @@ from urllib.request import Request, urlopen
 from bs4 import BeautifulSoup, Tag
 
 from people import PeopleStore
-from web_search import search_best_web_result
+from web_search import search_research_track_pc_page
 
 RESEARCHR_DOMAIN = "researchr.org"
 
@@ -35,30 +34,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("conference", help="Conference acronym or name, e.g., ISSTA")
     parser.add_argument("year", type=int, help="Conference year, e.g., 2024")
-    parser.add_argument(
-        "--people-file",
-        type=Path,
-        default=None,
-        help="Optional people JSONL path override. By default, people.py chooses the store location.",
-    )
     return parser.parse_args(argv)
 
 
 def search_research_track_url(conference: str, year: int) -> str:
-    primary_query = f"{conference} {year} research track Program Committee site:{RESEARCHR_DOMAIN}"
-    primary_result = search_best_web_result(primary_query).top_link
-    if is_researchr_url(primary_result):
-        return primary_result
-
-    # Retry with a stricter query if the first result is outside researchr.org.
-    fallback_query = f"{conference} {year} researchr research track"
-    fallback_result = search_best_web_result(fallback_query).top_link
-    if is_researchr_url(fallback_result):
-        return fallback_result
-
+    result = search_research_track_pc_page(conference, year)
+    if is_researchr_url(result.top_link):
+        return result.top_link
     raise ValueError(
-        "Could not find a researchr.org conference page. "
-        f"Primary result: {primary_result}; fallback result: {fallback_result}"
+        f"Could not find a researchr.org main research track page for {conference} {year}. "
+        f"Got: {result.top_link}"
     )
 
 
@@ -140,12 +125,80 @@ def resolve_marker_target(soup: BeautifulSoup, marker: Tag, base_url: str) -> Ta
 
 def looks_like_name(value: str) -> bool:
     cleaned = normalize_whitespace(value)
-    if len(cleaned) < 4:
+    if len(cleaned) < 4 or len(cleaned) > 80:
         return False
     if any(char.isdigit() for char in cleaned):
         return False
+
+    lowered = cleaned.lower()
+    disallowed_phrases = (
+        "technical papers",
+        "distinguished paper award",
+        "link to publication",
+        "media attached",
+        "pre-print",
+        "not scheduled",
+        "doi",
+        "talk",
+    )
+    if any(phrase in lowered for phrase in disallowed_phrases):
+        return False
+
     words = cleaned.split(" ")
-    return len(words) >= 2
+    if len(words) < 2 or len(words) > 6:
+        return False
+
+    disallowed_name_tokens = {
+        "university",
+        "institute",
+        "college",
+        "school",
+        "department",
+        "laboratory",
+        "lab",
+        "research",
+        "technical",
+        "papers",
+        "award",
+        "doi",
+    }
+    if any(token.lower().strip(".,;:()[]") in disallowed_name_tokens for token in words):
+        return False
+
+    candidate_tokens = 0
+    uppercase_like_tokens = 0
+    for token in words:
+        stripped = token.strip(".,;:()[]")
+        if not stripped or not any(char.isalpha() for char in stripped):
+            continue
+        candidate_tokens += 1
+
+        if stripped[0].isupper():
+            uppercase_like_tokens += 1
+            continue
+
+        # Handle names like d'Amorim where the first letter is lower-case.
+        if "'" in stripped and any(char.isupper() for char in stripped[1:]):
+            uppercase_like_tokens += 1
+
+    return candidate_tokens >= 2 and uppercase_like_tokens >= 2
+
+
+def looks_like_affiliation(value: str) -> bool:
+    cleaned = normalize_whitespace(value)
+    if len(cleaned) < 3:
+        return False
+
+    lowered = cleaned.lower()
+    disallowed_affiliation_phrases = (
+        "technical papers",
+        "distinguished paper award",
+        "link to publication",
+        "media attached",
+        "pre-print",
+        "doi",
+    )
+    return not any(phrase in lowered for phrase in disallowed_affiliation_phrases)
 
 
 def parse_name_affiliation(text: str) -> tuple[str, str] | None:
@@ -211,7 +264,7 @@ def extract_pc_members(container: Tag) -> list[tuple[str, str]]:
         clean_aff = normalize_whitespace(affiliation)
         if ":" in clean_name or is_non_member_label(clean_name):
             return
-        if not looks_like_name(clean_name) or not clean_aff:
+        if not looks_like_name(clean_name) or not looks_like_affiliation(clean_aff):
             return
         key = (clean_name, clean_aff)
         if key not in seen:
@@ -311,7 +364,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not members:
         raise ValueError("Found Program Committee panel, but no member entries were extracted")
 
-    store = PeopleStore(args.people_file)
+    store = PeopleStore()
     added_count, updated_count = store.update_many(
         build_people_updates(args.conference, args.year, members)
     )

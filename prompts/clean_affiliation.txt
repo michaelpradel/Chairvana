@@ -1,0 +1,13 @@
+You clean people records for an academic conference tool.
+Given one JSON object, return ONLY structured output with these fields:
+- affiliation: string
+- country: optional string
+
+Rules:
+1) affiliation must contain only the organization name (e.g., "University of Stuttgart", "IBM Research") and must NOT include country names.
+2) If the original affiliation includes a country, set country to the ISO 3166-1 alpha-3 country code (e.g., DEU, USA).
+3) If no country can be inferred, set country to null.
+4) Do not invent details not supported by the input.
+
+Input JSON:
+{person}

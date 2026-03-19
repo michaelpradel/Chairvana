@@ -15,14 +15,18 @@ import re
 from pathlib import Path
 from typing import Sequence
 
-from openai import OpenAI
 from pydantic import BaseModel, HttpUrl, TypeAdapter
 
+from llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
 
-MODEL = "gpt-5-mini-2025-08-07"
+
+MODEL = DEFAULT_RESPONSES_MODEL
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "select_best_web_result.txt"
 HOMEPAGE_EMAIL_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "select_homepage_and_email.txt"
+)
+RESEARCH_TRACK_PROMPT_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "find_research_track_pc_page.txt"
 )
 
 
@@ -36,19 +40,6 @@ class HomepageAndEmailResult(BaseModel):
 
 
 URL_ADAPTER = TypeAdapter(HttpUrl)
-
-
-def load_api_key() -> str:
-    token_path = Path(__file__).resolve().parent.parent / ".openai_token"
-    try:
-        token = token_path.read_text(encoding="utf-8").strip()
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(f"Missing API token file: {token_path}") from exc
-
-    if not token:
-        raise ValueError(f"API token file is empty: {token_path}")
-
-    return token
 
 
 def load_prompt(query: str) -> str:
@@ -106,37 +97,43 @@ def deobfuscate_email(value: str) -> str:
 
 def search_best_web_result(query: str) -> SearchResult:
     """Return the best matching web link for the given query."""
-    client = OpenAI(api_key=load_api_key())
-
-    response = client.responses.parse(
+    result = parse_structured_response(
+        input_text=load_prompt(query),
+        response_model=SearchResult,
         model=MODEL,
-        input=load_prompt(query),
         tools=[{"type": "web_search"}],
-        text_format=SearchResult,
     )
 
-    result = response.output_parsed
-    if result is None:
-        raise ValueError("Model response did not contain structured output")
+    top_link = str(URL_ADAPTER.validate_python(result.top_link))
+    return SearchResult(top_link=top_link)
 
+
+def search_research_track_pc_page(conference: str, year: int) -> SearchResult:
+    """Return the researchr.org URL for the main research track PC page of the given conference/year."""
+    try:
+        prompt_template = RESEARCH_TRACK_PROMPT_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Missing prompt template: {RESEARCH_TRACK_PROMPT_PATH}") from exc
+
+    prompt = prompt_template.format(conference=conference, year=year)
+    result = parse_structured_response(
+        input_text=prompt,
+        response_model=SearchResult,
+        model=MODEL,
+        tools=[{"type": "web_search"}],
+    )
     top_link = str(URL_ADAPTER.validate_python(result.top_link))
     return SearchResult(top_link=top_link)
 
 
 def find_homepage_and_email(person: str) -> HomepageAndEmailResult:
     """Return a researcher's personal homepage and email address."""
-    client = OpenAI(api_key=load_api_key())
-
-    response = client.responses.parse(
+    result = parse_structured_response(
+        input_text=load_homepage_email_prompt(person),
+        response_model=HomepageAndEmailResult,
         model=MODEL,
-        input=load_homepage_email_prompt(person),
         tools=[{"type": "web_search"}],
-        text_format=HomepageAndEmailResult,
     )
-
-    result = response.output_parsed
-    if result is None:
-        raise ValueError("Model response did not contain structured output")
 
     homepage = str(URL_ADAPTER.validate_python(result.homepage))
     email = deobfuscate_email(result.email)

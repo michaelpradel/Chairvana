@@ -66,11 +66,30 @@ h2 {
 }
 
 .meta {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
   font-size: 0.95rem;
   background: rgba(255, 255, 255, 0.45);
   border: 1px solid var(--panel-border);
   padding: 0.45rem 0.7rem;
   border-radius: 999px;
+}
+
+.reload-btn {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid rgba(14, 106, 97, 0.35);
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  background: var(--accent-soft);
+  transition: filter 120ms ease;
+}
+
+.reload-btn:hover {
+  filter: brightness(0.93);
 }
 
 .alerts {
@@ -231,6 +250,70 @@ button:hover {
 .empty {
   opacity: 0.75;
   padding: 0.5rem;
+}
+
+.form-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+button.secondary {
+  background: var(--bg-2);
+  color: var(--ink);
+  border-color: var(--panel-border);
+}
+
+.clean-status {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border-radius: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.9rem;
+  margin-bottom: 0.8rem;
+  border: 1px solid var(--panel-border);
+}
+
+.clean-status.running {
+  background: var(--accent-soft);
+  border-color: rgba(14, 106, 97, 0.35);
+}
+
+.clean-status.success {
+  background: var(--accent-soft);
+  border-color: rgba(14, 106, 97, 0.35);
+}
+
+.clean-status.error {
+  background: #f5dada;
+  border-color: rgba(143, 45, 45, 0.4);
+  color: var(--danger);
+}
+
+.spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.is-locked input,
+.is-locked button,
+.is-locked textarea,
+.is-locked select {
+  pointer-events: none;
+  opacity: 0.45;
 }
 
 @media (max-width: 900px) {

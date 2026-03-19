@@ -18,10 +18,11 @@
       <header class="topbar">
         <div>
           <h1>Chairvana</h1>
-          <p>Program committee intelligence with fast inline editing.</p>
+          <p>Where PC Chairs Reach Nirvana</p>
         </div>
         <div class="meta">
           <span>{{ people | length }} people loaded</span>
+          <a href="{{ url_for('index') }}" class="reload-btn" title="Reload from store">&#8635; Reload</a>
         </div>
       </header>
 
@@ -64,7 +65,13 @@
         <section class="panel edit-panel">
           {% if selected_person %}
           <h2>Edit Person</h2>
-          <form method="post" action="{{ url_for('update_person') }}" class="editor">
+          {% if clean_running %}
+          <div class="clean-status running" id="clean-banner">
+            <span class="spinner"></span>
+            Cleaning affiliation data&hellip; other edits are disabled.
+          </div>
+          {% endif %}
+          <form method="post" action="{{ url_for('update_person') }}" class="editor{{ ' is-locked' if clean_running else '' }}">
             <input type="hidden" name="original_name" value="{{ selected_person['name'] }}" />
             <input type="hidden" name="q" value="{{ query }}" />
 
@@ -78,9 +85,27 @@
               value="{{ selected_person.get('affiliation', '') }}"
             />
 
+            <label for="flags">Flags (space or comma separated)</label>
+            <input
+              id="flags"
+              name="flags"
+              value="{{ selected_person.get('flags', []) | join(' ') }}"
+              placeholder="#invite #redflag"
+            />
+
             <dl class="details">
               <dt>Known affiliations</dt>
               <dd>{{ selected_person.get('affiliations', []) | join(', ') }}</dd>
+              <dt>Flags</dt>
+              <dd>
+                {% if selected_person.get('flags') %}
+                {% for flag in selected_person.get('flags', []) %}
+                <span class="tag">{{ flag }}</span>
+                {% endfor %}
+                {% else %}
+                None
+                {% endif %}
+              </dd>
               <dt>PC memberships</dt>
               <dd>
                 {% if selected_person.get('pc_memberships') %}
@@ -93,7 +118,10 @@
               </dd>
             </dl>
 
-            <button type="submit" class="primary">Save changes</button>
+            <div class="form-actions">
+              <button type="submit" class="primary"{% if clean_running %} disabled{% endif %}>Save changes</button>
+              <button type="submit" formaction="{{ url_for('clean_person') }}" class="secondary"{% if clean_running %} disabled{% endif %}>Clean affiliation</button>
+            </div>
           </form>
           {% else %}
           <p>Select a person to edit.</p>
@@ -101,5 +129,56 @@
         </section>
       </section>
     </main>
+  <script>
+  (function () {
+    var cleanRunning = {{ 'true' if clean_running else 'false' }};
+    if (!cleanRunning) return;
+
+    var selectedName = {{ selected_person['name'] | tojson if selected_person else 'null' }};
+    var query = {{ query | tojson }};
+    var bannerEl = document.getElementById('clean-banner');
+    var editorEl = document.querySelector('.editor');
+
+    function onDone(data) {
+      if (editorEl) editorEl.classList.remove('is-locked');
+      editorEl.querySelectorAll('button[disabled]').forEach(function (b) { b.disabled = false; });
+      if (data.error) {
+        if (bannerEl) {
+          bannerEl.className = 'clean-status error';
+          bannerEl.textContent = 'Cleaning failed: ' + data.error;
+        }
+      } else {
+        if (bannerEl) {
+          bannerEl.className = 'clean-status success';
+          bannerEl.textContent = data.changed
+            ? 'Affiliation cleaned successfully.'
+            : 'Affiliation already clean — no changes needed.';
+        }
+        var resultName = data.result_name || selectedName;
+        setTimeout(function () {
+          window.location.assign(
+            '/?q=' + encodeURIComponent(query || '') +
+            '&selected=' + encodeURIComponent(resultName || '')
+          );
+        }, 1500);
+      }
+    }
+
+    function poll() {
+      fetch('/person/clean/status')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.running) {
+            setTimeout(poll, 2000);
+          } else {
+            onDone(data);
+          }
+        })
+        .catch(function () { setTimeout(poll, 3000); });
+    }
+
+    setTimeout(poll, 2000);
+  }());
+  </script>
   </body>
 </html>

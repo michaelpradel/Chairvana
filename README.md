@@ -6,6 +6,21 @@ Chairvana supports chairs of program committees (PCs) of academic conferences. I
 
 Chairvana now includes a web-based main interface for browsing and editing people in `data/people.jsonl`.
 
+## DBLP Preprocessing (Recommended)
+
+Querying the full `data/dblp.xml.gz` can be slow. Create a filtered JSONL snapshot once, then run queries against it:
+
+```bash
+python src/query_dblp.py --preprocess
+```
+
+This writes `data/dblp_filtered.jsonl` containing only:
+
+- publication types: `inproceedings`, `article`
+- venues (by DBLP key prefix): `conf/icse`, `conf/sigsoft`, `conf/kbse`, `conf/issta`, `conf/oopsla`
+
+After preprocessing, normal `src/query_dblp.py` queries automatically use `data/dblp_filtered.jsonl` when present.
+
 ### Run
 
 1. Install dependencies:
