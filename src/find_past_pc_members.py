@@ -11,6 +11,7 @@ Given a conference name and year (for example, "ISSTA" and 2024), this script:
 from __future__ import annotations
 
 import argparse
+import logging
 import re
 from typing import Sequence
 from urllib.parse import urljoin, urlparse
@@ -20,6 +21,8 @@ from bs4 import BeautifulSoup, Tag
 
 from people import PeopleStore
 from web_search import search_research_track_pc_page
+
+logger = logging.getLogger(__name__)
 
 RESEARCHR_DOMAIN = "researchr.org"
 
@@ -43,8 +46,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def search_research_track_url(conference: str, year: int) -> str:
+    logger.info(f"Searching for research track page for {conference} {year}...")
     result = search_research_track_pc_page(conference, year)
+    logger.debug(f"Web search returned: {result.top_link}")
     if is_researchr_url(result.top_link):
+        logger.info(f"Found researchr page: {result.top_link}")
         return result.top_link
     raise ValueError(
         f"Could not find a researchr.org main research track page for {conference} {year}. "
@@ -58,14 +64,24 @@ def is_researchr_url(url: str) -> bool:
 
 
 def download_html(url: str) -> str:
+    logger.info(f"Downloading HTML from: {url}")
     request = Request(url, headers={"User-Agent": "Mozilla/5.0 (Chairvana PC Extractor)"})
     with urlopen(request, timeout=30) as response:  # noqa: S310
         raw = response.read()
         encoding = response.headers.get_content_charset() or "utf-8"
-    return raw.decode(encoding, errors="replace")
+    decoded = raw.decode(encoding, errors="replace")
+    logger.debug(f"Downloaded {len(decoded)} characters")
+    return decoded
 
 
-def find_program_committee_container(soup: BeautifulSoup, base_url: str) -> Tag:
+def find_program_committee_container(
+    soup: BeautifulSoup, base_url: str, visited_urls: set[str] | None = None
+) -> Tag:
+    if visited_urls is None:
+        visited_urls = set()
+    visited_urls.add(base_url)
+
+    logger.info("Searching for Program Committee container...")
     markers: list[Tag] = []
     marker_tags = {"a", "button", "h1", "h2", "h3", "h4", "h5", "h6", "span", "div"}
     for tag in soup.find_all(marker_tags):
@@ -82,12 +98,14 @@ def find_program_committee_container(soup: BeautifulSoup, base_url: str) -> Tag:
             or ("program committee" in lowered and "technical papers" in lowered)
         ):
             markers.append(tag)
+            logger.debug(f"Found PC marker: {label}")
 
     if not markers:
         raise ValueError("Could not find a Program Committee marker in the page")
+    logger.info(f"Found {len(markers)} potential Program Committee marker(s)")
 
     for marker in markers:
-        target = resolve_marker_target(soup, marker, base_url)
+        target = resolve_marker_target(soup, marker, base_url, visited_urls)
         if target is not None:
             return target
 
@@ -95,7 +113,9 @@ def find_program_committee_container(soup: BeautifulSoup, base_url: str) -> Tag:
     return markers[0]
 
 
-def resolve_marker_target(soup: BeautifulSoup, marker: Tag, base_url: str) -> Tag | None:
+def resolve_marker_target(
+    soup: BeautifulSoup, marker: Tag, base_url: str, visited_urls: set[str]
+) -> Tag | None:
     # Handle links or buttons that target an in-page panel, e.g., href="#program-committee".
     for attr in ("href", "data-bs-target", "data-target"):
         target_ref = marker.get(attr)
@@ -115,14 +135,20 @@ def resolve_marker_target(soup: BeautifulSoup, marker: Tag, base_url: str) -> Ta
     if isinstance(href, str) and href and not href.startswith("#"):
         next_url = urljoin(base_url, href)
         if is_researchr_url(next_url):
+            if next_url in visited_urls:
+                logger.debug(f"Skipping already-visited URL to avoid cycle: {next_url}")
+                return marker
+            logger.debug(f"Following PC marker link to: {next_url}")
             try:
                 next_html = download_html(next_url)
             except Exception:  # noqa: BLE001
+                logger.debug(f"Failed to download from {next_url}, using marker as fallback")
                 return marker
             next_soup = BeautifulSoup(next_html, "html.parser")
             try:
-                return find_program_committee_container(next_soup, next_url)
+                return find_program_committee_container(next_soup, next_url, visited_urls)
             except Exception:  # noqa: BLE001
+                logger.debug(f"Failed to find PC container in {next_url}, using marker as fallback")
                 return marker
 
     return marker
@@ -231,6 +257,7 @@ def parse_name_affiliation(text: str) -> tuple[str, str] | None:
 
 
 def extract_pc_members(container: Tag) -> list[tuple[str, str]]:
+    logger.info("Extracting PC members from container...")
     members: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
 
@@ -275,6 +302,7 @@ def extract_pc_members(container: Tag) -> list[tuple[str, str]]:
         if key not in seen:
             seen.add(key)
             members.append(key)
+            logger.debug(f"Added PC member: {clean_name} ({clean_aff})")
 
     # 0) researchr committee pages commonly use "div.media-body" cards.
     media_blocks = container.select("div.media-body")
@@ -296,6 +324,7 @@ def extract_pc_members(container: Tag) -> list[tuple[str, str]]:
     # If researchr member cards are present, trust that structured representation
     # and avoid generic fallbacks that can pull navigation/venue list text.
     if media_blocks and members:
+        logger.info(f"Extracted {len(members)} members from media blocks")
         return members
 
     # 1) Structured tables are the most reliable source.
@@ -335,6 +364,7 @@ def extract_pc_members(container: Tag) -> list[tuple[str, str]]:
         if remainder:
             add_member(name, remainder)
 
+    logger.info(f"Extracted {len(members)} PC members total")
     return members
 
 
@@ -361,14 +391,17 @@ def print_members(members: list[tuple[str, str]]) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    logger.info(f"Starting PC member extraction for {args.conference} {args.year}")
 
     conference_url = search_research_track_url(args.conference, args.year)
     html = download_html(conference_url)
+    logger.debug("Parsing HTML with BeautifulSoup...")
     soup = BeautifulSoup(html, "html.parser")
 
-    pc_container = find_program_committee_container(soup, conference_url)
+    pc_container = find_program_committee_container(soup, conference_url, visited_urls={conference_url})
     members = extract_pc_members(pc_container)
     if not members:
+        logger.warning("No members found in container, trying full page...")
         # Some researchr pages link to committee content but the marker itself is not the parent container.
         members = extract_pc_members(soup)
     if not members:
@@ -378,21 +411,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Extracted {len(members)} PC members")
 
     if args.dry_run:
+        logger.info("Dry run mode - displaying members without updating store")
         print_members(members)
         return 0
 
+    logger.info("Updating people store...")
     store = PeopleStore()
     added_count, updated_count = store.update_many(
         build_people_updates(args.conference, args.year, members)
     )
 
+    logger.info(f"Successfully updated store: {added_count} added, {updated_count} updated")
     print(f"Added {added_count} people and updated {updated_count} people")
     print(f"Saved JSONL to: {store.path}")
     return 0
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
     try:
         raise SystemExit(main())
+    except SystemExit:
+        raise
     except Exception as exc:  # noqa: BLE001
+        logger.exception("An error occurred during execution:")
         raise SystemExit(f"Error: {exc}") from exc
