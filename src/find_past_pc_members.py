@@ -34,6 +34,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("conference", help="Conference acronym or name, e.g., ISSTA")
     parser.add_argument("year", type=int, help="Conference year, e.g., 2024")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print extracted PC members and affiliations without updating the people store.",
+    )
     return parser.parse_args(argv)
 
 
@@ -349,6 +354,11 @@ def build_people_updates(
     return updates
 
 
+def print_members(members: list[tuple[str, str]]) -> None:
+    for name, affiliation in members:
+        print(f"{name}\t{affiliation}")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
 
@@ -364,13 +374,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not members:
         raise ValueError("Found Program Committee panel, but no member entries were extracted")
 
+    print(f"Conference page: {conference_url}")
+    print(f"Extracted {len(members)} PC members")
+
+    if args.dry_run:
+        print_members(members)
+        return 0
+
     store = PeopleStore()
     added_count, updated_count = store.update_many(
         build_people_updates(args.conference, args.year, members)
     )
 
-    print(f"Conference page: {conference_url}")
-    print(f"Extracted {len(members)} PC members")
     print(f"Added {added_count} people and updated {updated_count} people")
     print(f"Saved JSONL to: {store.path}")
     return 0

@@ -1,0 +1,12 @@
+You are given only a person's name.
+Decide one of exactly these labels:
+- very_likely_male
+- very_likely_female
+- unclear
+
+Rules:
+- Use very_likely_* only when the likely gender from the name is strong.
+- If the name is ambiguous across cultures/languages, return unclear.
+- Do not use any external tools or web browsing.
+
+Name: {name}

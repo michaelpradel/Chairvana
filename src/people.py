@@ -129,45 +129,102 @@ class PeopleStore:
         else:
             self.repo_dir = self.path.parent / DEFAULT_PEOPLE_REPO_DIRNAME
 
-    def load(self) -> dict[str, dict[str, Any]]:
-        people: dict[str, dict[str, Any]] = {}
-        if not self.path.exists():
-            return people
+    def load(self, commit: str | None = None) -> dict[str, dict[str, Any]]:
+        if commit is None:
+            if not self.path.exists():
+                return {}
 
-        with self.path.open("r", encoding="utf-8") as file_obj:
-            for line in file_obj:
-                line = line.strip()
-                if not line:
-                    continue
+            with self.path.open("r", encoding="utf-8") as file_obj:
+                return self._load_from_lines(file_obj)
 
-                record = json.loads(line)
-                if not isinstance(record, dict):
-                    continue
+        normalized_commit = self.resolve_history_commit(commit)
+        content = self._read_people_file_from_commit(normalized_commit)
+        return self._load_from_lines(content.splitlines())
 
-                name = record.get("name")
-                if not isinstance(name, str) or not name.strip():
-                    continue
-
-                normalized_name = name.strip()
-                existing = people.get(normalized_name)
-                if existing is None:
-                    people[normalized_name] = _merge_person_record(
-                        {},
-                        {"name": normalized_name, **record},
-                    )
-                else:
-                    people[normalized_name] = _merge_person_record(
-                        existing,
-                        {"name": normalized_name, **record},
-                    )
-
-        return people
-
-    def list_people(self) -> list[dict[str, Any]]:
-        people = self.load()
+    def list_people(self, commit: str | None = None) -> list[dict[str, Any]]:
+        people = self.load(commit=commit)
         return [people[name] for name in sorted(people, key=str.casefold)]
 
-    def update_many(self, entries: Iterable[dict[str, Any]]) -> tuple[int, int]:
+    def list_history(self) -> list[dict[str, str]]:
+        self._ensure_local_repo()
+        people_filename = self._people_repo_path()
+        log_result = self._git(
+            "log",
+            "--format=%H%x1f%h%x1f%cs%x1f%s",
+            "--",
+            people_filename,
+            check=False,
+        )
+        if log_result.returncode != 0:
+            stderr = log_result.stderr.strip()
+            if "does not have any commits yet" in stderr:
+                return []
+            raise RuntimeError(stderr or "git log failed")
+
+        history: list[dict[str, str]] = []
+        for line in log_result.stdout.splitlines():
+            if not line.strip():
+                continue
+
+            commit_hash, short_hash, commit_date, subject = line.split("\x1f", maxsplit=3)
+            history.append(
+                {
+                    "commit": commit_hash,
+                    "short_commit": short_hash,
+                    "date": commit_date,
+                    "subject": subject,
+                }
+            )
+        return history
+
+    def get_history_state(self, commit: str | None = None) -> dict[str, Any]:
+        history = self.list_history()
+        if not history:
+            return {
+                "entries": history,
+                "current_commit": None,
+                "current_entry": None,
+                "older_commit": None,
+                "newer_commit": None,
+                "is_head": True,
+            }
+
+        current_commit = history[0]["commit"] if commit is None else self.resolve_history_commit(commit)
+        current_index = next((index for index, entry in enumerate(history) if entry["commit"] == current_commit), None)
+        if current_index is None:
+            raise ValueError(f"Commit {current_commit} is not in the history of {self._people_repo_path()}")
+
+        older_commit = history[current_index + 1]["commit"] if current_index + 1 < len(history) else None
+        newer_commit = history[current_index - 1]["commit"] if current_index > 0 else None
+        return {
+            "entries": history,
+            "current_commit": current_commit,
+            "current_entry": history[current_index],
+            "older_commit": older_commit,
+            "newer_commit": newer_commit,
+            "is_head": current_index == 0,
+        }
+
+    def resolve_history_commit(self, commit: str) -> str:
+        normalized_commit = commit.strip()
+        if not normalized_commit:
+            raise ValueError("history commit must be non-empty")
+
+        history = self.list_history()
+        matching_commits = [entry["commit"] for entry in history if entry["commit"].startswith(normalized_commit)]
+        if len(matching_commits) == 1:
+            return matching_commits[0]
+        if len(matching_commits) > 1:
+            raise ValueError(f"Ambiguous history commit: {commit}")
+        raise ValueError(f"Unknown history commit: {commit}")
+
+    def update_many(
+        self,
+        entries: Iterable[dict[str, Any]],
+        *,
+        base_commit: str | None = None,
+    ) -> tuple[int, int]:
+        self._prepare_write_base(base_commit)
         people = self.load()
         added = 0
         updated = 0
@@ -193,11 +250,18 @@ class PeopleStore:
         self._write_all(people)
         return added, updated
 
-    def update(self, name: str, updates: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    def update(
+        self,
+        name: str,
+        updates: dict[str, Any],
+        *,
+        base_commit: str | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
         normalized_name = name.strip()
         if not normalized_name:
             raise ValueError("name must be non-empty")
 
+        self._prepare_write_base(base_commit)
         people = self.load()
         merged_entry = {"name": normalized_name, **updates}
 
@@ -213,11 +277,18 @@ class PeopleStore:
         self._write_all(people)
         return is_new, people[normalized_name]
 
-    def update_person(self, original_name: str, updates: dict[str, Any]) -> dict[str, Any]:
+    def update_person(
+        self,
+        original_name: str,
+        updates: dict[str, Any],
+        *,
+        base_commit: str | None = None,
+    ) -> dict[str, Any]:
         normalized_original_name = original_name.strip()
         if not normalized_original_name:
             raise ValueError("original_name must be non-empty")
 
+        self._prepare_write_base(base_commit)
         people = self.load()
         existing = people.get(normalized_original_name)
         if existing is None:
@@ -254,11 +325,18 @@ class PeopleStore:
         self._write_all(people)
         return updated
 
-    def replace_person(self, original_name: str, replacement: dict[str, Any]) -> dict[str, Any]:
+    def replace_person(
+        self,
+        original_name: str,
+        replacement: dict[str, Any],
+        *,
+        base_commit: str | None = None,
+    ) -> dict[str, Any]:
         normalized_original_name = original_name.strip()
         if not normalized_original_name:
             raise ValueError("original_name must be non-empty")
 
+        self._prepare_write_base(base_commit)
         people = self.load()
         if normalized_original_name not in people:
             raise ValueError(f"No person found with name: {normalized_original_name}")
@@ -274,7 +352,13 @@ class PeopleStore:
         self._write_all(people)
         return normalized
 
-    def replace_many(self, replacements: Iterable[dict[str, Any]]) -> tuple[int, int]:
+    def replace_many(
+        self,
+        replacements: Iterable[dict[str, Any]],
+        *,
+        base_commit: str | None = None,
+    ) -> tuple[int, int]:
+        self._prepare_write_base(base_commit)
         people = self.load()
         replaced = 0
         renamed = 0
@@ -330,6 +414,61 @@ class PeopleStore:
         normalized.pop("original_name", None)
         return normalized
 
+    def _load_from_lines(self, lines: Iterable[str]) -> dict[str, dict[str, Any]]:
+        people: dict[str, dict[str, Any]] = {}
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                continue
+
+            name = record.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+
+            normalized_name = name.strip()
+            existing = people.get(normalized_name)
+            if existing is None:
+                people[normalized_name] = _merge_person_record(
+                    {},
+                    {"name": normalized_name, **record},
+                )
+            else:
+                people[normalized_name] = _merge_person_record(
+                    existing,
+                    {"name": normalized_name, **record},
+                )
+
+        return people
+
+    def _people_repo_path(self) -> str:
+        return self.path.relative_to(self.repo_dir).as_posix()
+
+    def _read_people_file_from_commit(self, commit: str) -> str:
+        people_filename = self._people_repo_path()
+        show_result = self._git("show", f"{commit}:{people_filename}", check=False)
+        if show_result.returncode == 0:
+            return show_result.stdout
+
+        stderr = show_result.stderr.strip()
+        if "exists on disk, but not in" in stderr or "path '" in stderr and "does not exist in" in stderr:
+            return ""
+        raise RuntimeError(stderr or f"git show failed for commit {commit}")
+
+    def _prepare_write_base(self, base_commit: str | None) -> None:
+        if base_commit is None:
+            return
+
+        target_commit = self.resolve_history_commit(base_commit)
+        head_commit = self._current_head_commit()
+        if head_commit == target_commit:
+            return
+
+        self._git("reset", "--hard", target_commit)
+
     def _write_all(self, people: dict[str, dict[str, Any]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         sorted_names = sorted(people, key=str.casefold)
@@ -361,10 +500,21 @@ class PeopleStore:
         self._git("config", "user.name", "People Store Bot")
         self._git("config", "user.email", "people-store@local")
 
+    def _current_head_commit(self) -> str | None:
+        self._ensure_local_repo()
+        rev_parse = self._git("rev-parse", "HEAD", check=False)
+        if rev_parse.returncode == 0:
+            return rev_parse.stdout.strip()
+
+        stderr = rev_parse.stderr.strip()
+        if "unknown revision or path not in the working tree" in stderr or "Needed a single revision" in stderr:
+            return None
+        raise RuntimeError(stderr or "git rev-parse failed")
+
     def _commit_people_file(self, people_count: int) -> None:
         self._ensure_local_repo()
 
-        people_filename = self.path.name
+        people_filename = self._people_repo_path()
         if self.path.parent != self.repo_dir:
             raise ValueError(
                 f"People file path must be inside repository work tree {self.repo_dir}, got {self.path}"

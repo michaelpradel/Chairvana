@@ -24,8 +24,8 @@ _clean_status: dict[str, Any] = {
 }
 
 
-def _filtered_people(query: str) -> list[dict[str, Any]]:
-    people = store.list_people()
+def _filtered_people(query: str, commit: str | None = None) -> list[dict[str, Any]]:
+    people = store.list_people(commit=commit)
     normalized_query = query.strip().casefold()
     if not normalized_query:
         return people
@@ -50,8 +50,15 @@ def _filtered_people(query: str) -> list[dict[str, Any]]:
 def index() -> str:
     query = request.args.get("q", "")
     selected_name = request.args.get("selected", "").strip()
+    requested_history = request.args.get("history", "").strip()
 
-    people = _filtered_people(query)
+    try:
+        history_state = store.get_history_state(requested_history or None)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        history_state = store.get_history_state()
+
+    people = _filtered_people(query, history_state["current_commit"])
 
     selected_person: dict[str, Any] | None = None
     if selected_name:
@@ -70,8 +77,14 @@ def index() -> str:
         "index.html",
         people=people,
         selected_person=selected_person,
+        selected_name=selected_name,
         query=query,
         clean_running=clean_running,
+        history_commit=history_state["current_commit"],
+        history_entry=history_state["current_entry"],
+        history_is_head=history_state["is_head"],
+        older_history_commit=history_state["older_commit"],
+        newer_history_commit=history_state["newer_commit"],
     )
 
 
@@ -82,15 +95,16 @@ def update_person() -> Any:
     new_affiliation = request.form.get("affiliation", "").strip()
     flags = request.form.get("flags", "").strip()
     query = request.form.get("q", "")
+    history_commit = request.form.get("history", "").strip() or None
 
     if not original_name:
         flash("Missing original person name.", "error")
-        return redirect(url_for("index", q=query))
+        return redirect(url_for("index", q=query, history=history_commit))
 
     with _clean_lock:
         if _clean_status["running"]:
             flash("Cannot save: affiliation cleaning is in progress.", "error")
-            return redirect(url_for("index", q=query, selected=original_name))
+            return redirect(url_for("index", q=query, selected=original_name, history=history_commit))
 
     try:
         updated = store.update_person(
@@ -100,10 +114,11 @@ def update_person() -> Any:
                 "affiliation": new_affiliation,
                 "flags": flags,
             },
+            base_commit=history_commit,
         )
     except ValueError as exc:
         flash(str(exc), "error")
-        return redirect(url_for("index", q=query, selected=original_name))
+        return redirect(url_for("index", q=query, selected=original_name, history=history_commit))
 
     flash("Person updated successfully.", "success")
     return redirect(url_for("index", q=query, selected=updated["name"]))
@@ -113,20 +128,26 @@ def update_person() -> Any:
 def clean_person() -> Any:
     original_name = request.form.get("original_name", "").strip()
     query = request.form.get("q", "")
+    history_commit = request.form.get("history", "").strip() or None
 
     if not original_name:
         flash("No person selected.", "error")
-        return redirect(url_for("index", q=query))
+        return redirect(url_for("index", q=query, history=history_commit))
 
     with _clean_lock:
         if _clean_status["running"]:
             flash("Cleaning is already in progress.", "error")
-            return redirect(url_for("index", q=query, selected=original_name))
+            return redirect(url_for("index", q=query, selected=original_name, history=history_commit))
         _clean_status.update({"running": True, "error": None, "changed": False, "result_name": None})
 
     def _run() -> None:
         try:
-            changed, result_name = clean_single(store, original_name, DEFAULT_RESPONSES_MODEL)
+            changed, result_name = clean_single(
+                store,
+                original_name,
+                DEFAULT_RESPONSES_MODEL,
+                base_commit=history_commit,
+            )
             with _clean_lock:
                 _clean_status["changed"] = changed
                 _clean_status["result_name"] = result_name
@@ -138,7 +159,7 @@ def clean_person() -> Any:
                 _clean_status["running"] = False
 
     threading.Thread(target=_run, daemon=True).start()
-    return redirect(url_for("index", q=query, selected=original_name))
+    return redirect(url_for("index", q=query, selected=original_name, history=history_commit))
 
 
 @app.get("/person/clean/status")

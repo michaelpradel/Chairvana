@@ -1,0 +1,7 @@
+Determine whether the following person is male or female by inspecting their homepage.
+You may use web search/browsing tools to visit the URL and related pages if needed.
+Use profile text, pronouns, and photos when available.
+Return only the structured output.
+
+Person name: {name}
+Homepage URL: {homepage}

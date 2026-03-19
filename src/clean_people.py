@@ -133,15 +133,15 @@ def _get_person_by_name(people: dict[str, dict[str, Any]], requested_name: str) 
     raise ValueError(f"Ambiguous name {requested_name!r}: {matches}")
 
 
-def clean_single(store: PeopleStore, name: str, model: str) -> tuple[bool, str]:
-    people = store.load()
+def clean_single(store: PeopleStore, name: str, model: str, base_commit: str | None = None) -> tuple[bool, str]:
+    people = store.load(commit=base_commit)
     original_name, entry = _get_person_by_name(people, name)
     cleaned = clean_record(entry, model)
 
     if cleaned == entry:
         return False, original_name
 
-    store.replace_person(original_name, cleaned)
+    store.replace_person(original_name, cleaned, base_commit=base_commit)
     return True, cleaned["name"]
 
 
