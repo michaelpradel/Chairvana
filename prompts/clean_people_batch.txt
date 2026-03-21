@@ -1,0 +1,27 @@
+You clean people records for an academic conference tool.
+
+You are given a JSON array named people, where each element has only:
+- name: string
+- affiliation: string or null
+- country: string or null
+
+Return ONLY structured output with one field:
+- people: array of cleaned records
+
+Each cleaned record must contain:
+- original_name: string (must exactly match one input name)
+- name: string (cleaned person name)
+- affiliation: string (cleaned organization name only)
+- country: optional string (ISO 3166-1 alpha-3, e.g., DEU, USA)
+
+Rules:
+1) Return exactly one output record for every input person.
+2) original_name values must be unique in the output.
+3) Keep name as a real person name. Remove role noise like "Area Chair" or affiliation/country text from the name.
+4) affiliation must contain only the organization name and must not include country names.
+5) If country can be inferred from the input, set country to the ISO alpha-3 code; otherwise set it to null.
+6) Do not invent facts not supported by the input.
+7) Prefer minimal edits when input already looks correct.
+
+Input JSON:
+{people}

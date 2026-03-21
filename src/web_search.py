@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 from typing import Sequence
 
-from pydantic import BaseModel, HttpUrl, TypeAdapter
+from pydantic import BaseModel, HttpUrl, TypeAdapter, ValidationError
 
 from llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
 
@@ -40,6 +40,18 @@ class HomepageAndEmailResult(BaseModel):
 
 
 URL_ADAPTER = TypeAdapter(HttpUrl)
+
+
+def normalize_optional_homepage(value: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        return ""
+
+    try:
+        return str(URL_ADAPTER.validate_python(candidate))
+    except ValidationError:
+        print(f"[Web][Warn] Invalid homepage returned by LLM: {value!r}")
+        return ""
 
 
 def load_prompt(query: str) -> str:
@@ -135,8 +147,17 @@ def find_homepage_and_email(person: str) -> HomepageAndEmailResult:
         tools=[{"type": "web_search"}],
     )
 
-    homepage = str(URL_ADAPTER.validate_python(result.homepage))
-    email = deobfuscate_email(result.email)
+    homepage = normalize_optional_homepage(result.homepage)
+    email_candidate = result.email.strip()
+    if not email_candidate:
+        email = ""
+    else:
+        try:
+            email = deobfuscate_email(email_candidate)
+        except ValueError:
+            print(f"[Web][Warn] Invalid email returned by LLM: {result.email!r}")
+            email = ""
+
     return HomepageAndEmailResult(homepage=homepage, email=email)
 
 
@@ -154,7 +175,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception as exc:  # noqa: BLE001
-        raise SystemExit(f"Error: {exc}") from exc
+    raise SystemExit(main())

@@ -1,0 +1,20 @@
+You are completing missing affiliation data for a software engineering researcher.
+
+Use web search to identify the most likely personal homepage and current affiliation.
+
+Input person:
+- Name: {name}
+- Existing homepage (may be empty): {existing_homepage}
+- Recent paper titles from DBLP (may be empty):
+{recent_papers}
+
+Requirements:
+- Use web search and cross-check multiple sources.
+- Prioritize reliable sources: personal homepage, university profile, official lab page, recent conference profile.
+- Match the identity carefully using name, research area, and recent paper titles.
+- Return exactly one homepage URL (or empty string if unavailable).
+- Return one affiliation string (non-empty only when confident).
+- Return country as ISO-3166 alpha-3 code (for example: USA, DEU, CAN) or empty string if unsure.
+- If uncertain about the person identity, return empty strings for all fields.
+
+Return only JSON that matches the required schema. No markdown, no explanations, no extra keys.

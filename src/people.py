@@ -1,6 +1,7 @@
-"""Utilities for reading and updating the people JSONL store.
+"""Utilities for reading and updating people-related JSONL stores.
 
-This module is the single point of entry for writes to `data/people.jsonl`.
+This module is the single point of entry for writes to `data/people.jsonl`
+and `data/expertise_embeddings.jsonl` inside the local people git repo.
 Each person is uniquely identified by the `name` field.
 """
 
@@ -16,6 +17,7 @@ from typing import Any, Iterable
 DEFAULT_PEOPLE_REPO_DIRNAME = ".people_repo"
 DEFAULT_PEOPLE_REPO_PATH = Path(__file__).resolve().parent.parent / "data" / DEFAULT_PEOPLE_REPO_DIRNAME
 DEFAULT_PEOPLE_PATH = DEFAULT_PEOPLE_REPO_PATH / "people.jsonl"
+DEFAULT_EXPERTISE_EMBEDDINGS_PATH = DEFAULT_PEOPLE_REPO_PATH / "expertise_embeddings.jsonl"
 
 
 def _merge_values(existing: Any, new_value: Any) -> Any:
@@ -113,6 +115,11 @@ def _merge_person_record(existing: dict[str, Any], updates: dict[str, Any]) -> d
     else:
         merged.pop("flags", None)
 
+    # Publication summaries are recomputed as a whole and should replace the
+    # previous summary instead of merging nested venue counts.
+    if "publication_summary" in updates:
+        merged["publication_summary"] = updates["publication_summary"]
+
     merged.pop("affiliations", None)
     return merged
 
@@ -120,7 +127,12 @@ def _merge_person_record(existing: dict[str, Any], updates: dict[str, Any]) -> d
 class PeopleStore:
     """Read and update person records stored as JSONL."""
 
-    def __init__(self, path: Path | None = None, repo_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        repo_dir: Path | None = None,
+        expertise_embeddings_path: Path | None = None,
+    ) -> None:
         self.path = path or DEFAULT_PEOPLE_PATH
         if repo_dir is not None:
             self.repo_dir = repo_dir
@@ -128,6 +140,9 @@ class PeopleStore:
             self.repo_dir = self.path.parent
         else:
             self.repo_dir = self.path.parent / DEFAULT_PEOPLE_REPO_DIRNAME
+        self.expertise_embeddings_path = expertise_embeddings_path or (
+            self.repo_dir / DEFAULT_EXPERTISE_EMBEDDINGS_PATH.name
+        )
 
     def load(self, commit: str | None = None) -> dict[str, dict[str, Any]]:
         if commit is None:
@@ -145,14 +160,28 @@ class PeopleStore:
         people = self.load(commit=commit)
         return [people[name] for name in sorted(people, key=str.casefold)]
 
+    def load_expertise_embeddings(self, commit: str | None = None) -> dict[str, dict[str, Any]]:
+        if commit is None:
+            if not self.expertise_embeddings_path.exists():
+                return {}
+
+            with self.expertise_embeddings_path.open("r", encoding="utf-8") as file_obj:
+                return self._load_expertise_from_lines(file_obj)
+
+        normalized_commit = self.resolve_history_commit(commit)
+        content = self._read_file_from_commit(normalized_commit, self._expertise_repo_path())
+        return self._load_expertise_from_lines(content.splitlines())
+
     def list_history(self) -> list[dict[str, str]]:
         self._ensure_local_repo()
         people_filename = self._people_repo_path()
+        expertise_filename = self._expertise_repo_path()
         log_result = self._git(
             "log",
             "--format=%H%x1f%h%x1f%cs%x1f%s",
             "--",
             people_filename,
+            expertise_filename,
             check=False,
         )
         if log_result.returncode != 0:
@@ -250,6 +279,38 @@ class PeopleStore:
         self._write_all(people)
         return added, updated
 
+    def update_many_expertise(
+        self,
+        entries: Iterable[dict[str, Any]],
+        *,
+        base_commit: str | None = None,
+    ) -> tuple[int, int]:
+        self._prepare_write_base(base_commit)
+        embeddings_by_name = self.load_expertise_embeddings()
+        added = 0
+        updated = 0
+
+        for entry in entries:
+            name = entry.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(f"Each expertise entry must contain a non-empty 'name': {entry}")
+
+            normalized_name = name.strip()
+            normalized_entry = {"name": normalized_name, **entry}
+
+            if normalized_name in embeddings_by_name:
+                embeddings_by_name[normalized_name] = _merge_dict(
+                    embeddings_by_name[normalized_name],
+                    normalized_entry,
+                )
+                updated += 1
+            else:
+                embeddings_by_name[normalized_name] = normalized_entry
+                added += 1
+
+        self._write_all_expertise(embeddings_by_name)
+        return added, updated
+
     def update(
         self,
         name: str,
@@ -325,6 +386,24 @@ class PeopleStore:
         self._write_all(people)
         return updated
 
+    def delete_person(
+        self,
+        name: str,
+        *,
+        base_commit: str | None = None,
+    ) -> None:
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("name must be non-empty")
+
+        self._prepare_write_base(base_commit)
+        people = self.load()
+        if normalized_name not in people:
+            raise ValueError(f"No person found with name: {normalized_name}")
+
+        del people[normalized_name]
+        self._write_all(people)
+
     def replace_person(
         self,
         original_name: str,
@@ -392,6 +471,25 @@ class PeopleStore:
         self._write_all(people)
         return replaced, renamed
 
+    def overwrite_all(
+        self,
+        records: Iterable[dict[str, Any]],
+        *,
+        base_commit: str | None = None,
+    ) -> int:
+        self._prepare_write_base(base_commit)
+
+        normalized_records: dict[str, dict[str, Any]] = {}
+        for record in records:
+            normalized = self._normalize_person_record(record)
+            name = normalized["name"]
+            if name in normalized_records:
+                raise ValueError(f"Duplicate name in overwrite set: {name}")
+            normalized_records[name] = normalized
+
+        self._write_all(normalized_records)
+        return len(normalized_records)
+
     def _normalize_person_record(self, record: dict[str, Any]) -> dict[str, Any]:
         normalized = dict(record)
 
@@ -444,12 +542,37 @@ class PeopleStore:
 
         return people
 
+    def _load_expertise_from_lines(self, lines: Iterable[str]) -> dict[str, dict[str, Any]]:
+        embeddings_by_name: dict[str, dict[str, Any]] = {}
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                continue
+
+            name = record.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+
+            normalized_name = name.strip()
+            embeddings_by_name[normalized_name] = {"name": normalized_name, **record}
+
+        return embeddings_by_name
+
     def _people_repo_path(self) -> str:
         return self.path.relative_to(self.repo_dir).as_posix()
 
+    def _expertise_repo_path(self) -> str:
+        return self.expertise_embeddings_path.relative_to(self.repo_dir).as_posix()
+
     def _read_people_file_from_commit(self, commit: str) -> str:
-        people_filename = self._people_repo_path()
-        show_result = self._git("show", f"{commit}:{people_filename}", check=False)
+        return self._read_file_from_commit(commit, self._people_repo_path())
+
+    def _read_file_from_commit(self, commit: str, repo_filename: str) -> str:
+        show_result = self._git("show", f"{commit}:{repo_filename}", check=False)
         if show_result.returncode == 0:
             return show_result.stdout
 
@@ -479,7 +602,24 @@ class PeopleStore:
                 record.pop("affiliations", None)
                 file_obj.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-        self._commit_people_file(len(sorted_names))
+        self._commit_store_files(
+            message=f"Update people.jsonl ({len(sorted_names)} people)",
+            repo_paths=[self._people_repo_path()],
+        )
+
+    def _write_all_expertise(self, embeddings_by_name: dict[str, dict[str, Any]]) -> None:
+        self.expertise_embeddings_path.parent.mkdir(parents=True, exist_ok=True)
+        sorted_names = sorted(embeddings_by_name, key=str.casefold)
+
+        with self.expertise_embeddings_path.open("w", encoding="utf-8") as file_obj:
+            for name in sorted_names:
+                record = embeddings_by_name[name]
+                file_obj.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        self._commit_store_files(
+            message=f"Update expertise_embeddings.jsonl ({len(sorted_names)} people)",
+            repo_paths=[self._expertise_repo_path()],
+        )
 
     def _git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         command = [
@@ -511,21 +651,22 @@ class PeopleStore:
             return None
         raise RuntimeError(stderr or "git rev-parse failed")
 
-    def _commit_people_file(self, people_count: int) -> None:
+    def _commit_store_files(self, message: str, repo_paths: list[str]) -> None:
         self._ensure_local_repo()
 
-        people_filename = self._people_repo_path()
-        if self.path.parent != self.repo_dir:
-            raise ValueError(
-                f"People file path must be inside repository work tree {self.repo_dir}, got {self.path}"
-            )
+        for repo_path in repo_paths:
+            file_path = self.repo_dir / repo_path
+            if file_path.parent != self.repo_dir:
+                raise ValueError(
+                    f"Store file path must be inside repository work tree {self.repo_dir}, got {file_path}"
+                )
 
-        self._git("add", "--", people_filename)
+        self._git("add", "--", *repo_paths)
 
-        diff_status = self._git("diff", "--cached", "--quiet", "--", people_filename, check=False)
+        diff_status = self._git("diff", "--cached", "--quiet", "--", *repo_paths, check=False)
         if diff_status.returncode == 0:
             return
         if diff_status.returncode != 1:
             raise RuntimeError(diff_status.stderr.strip() or "git diff failed")
 
-        self._git("commit", "-m", f"Update people.jsonl ({people_count} people)")
+        self._git("commit", "-m", message)

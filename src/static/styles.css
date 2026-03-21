@@ -32,9 +32,9 @@ body {
 
 .layout {
   position: relative;
-  max-width: 1200px;
+  width: 100%;
   margin: 0 auto;
-  padding: 2rem 1rem 3rem;
+  padding: clamp(1rem, 2vw, 2rem) clamp(0.8rem, 2vw, 2rem) 2.5rem;
 }
 
 .topbar {
@@ -156,8 +156,28 @@ h2 {
 
 .content {
   display: grid;
-  grid-template-columns: 1.1fr 1fr;
-  gap: 1rem;
+  grid-template-columns: minmax(360px, 1fr) minmax(460px, 1.2fr);
+  gap: clamp(0.8rem, 1.2vw, 1.2rem);
+  align-items: start;
+}
+
+.list-panel {
+  min-width: 0;
+}
+
+.right-column {
+  min-width: 0;
+  display: grid;
+  gap: clamp(0.8rem, 1.2vw, 1.2rem);
+  align-content: start;
+}
+
+.edit-panel {
+  min-width: 0;
+}
+
+.distribution-panel {
+  min-width: 0;
 }
 
 .panel {
@@ -167,6 +187,7 @@ h2 {
   box-shadow: 0 12px 30px rgba(55, 38, 22, 0.08);
   padding: 1rem;
   animation: rise 420ms ease;
+  align-self: start;
 }
 
 @keyframes rise {
@@ -184,6 +205,11 @@ h2 {
   display: grid;
   gap: 0.45rem;
   margin-bottom: 0.9rem;
+}
+
+.list-panel > h2,
+.distribution-panel > h2 {
+  margin-bottom: 0.75rem;
 }
 
 label {
@@ -248,6 +274,11 @@ button:hover {
   opacity: 0.8;
 }
 
+.person-meta-inline {
+  font-size: 0.8rem;
+  opacity: 0.78;
+}
+
 .person-link.active {
   border-color: rgba(14, 106, 97, 0.5);
   background: rgba(201, 235, 230, 0.65);
@@ -256,6 +287,17 @@ button:hover {
 .editor {
   display: grid;
   gap: 0.52rem;
+}
+
+.field-note {
+  font-size: 0.84rem;
+  margin-top: -0.2rem;
+  margin-bottom: 0.2rem;
+  opacity: 0.85;
+}
+
+.field-note a {
+  color: var(--accent);
 }
 
 .details {
@@ -285,9 +327,170 @@ button:hover {
   background: rgba(30, 30, 30, 0.08);
 }
 
+.tag-secondary {
+  display: inline-block;
+  margin: 0.15rem 0.3rem 0.15rem 0;
+  padding: 0.22rem 0.44rem;
+  border-radius: 999px;
+  font-size: 0.77rem;
+  background: transparent;
+  color: rgba(30, 30, 30, 0.55);
+  font-style: italic;
+}
+
 .empty {
   opacity: 0.75;
   padding: 0.5rem;
+}
+
+.chart-filter {
+  margin-bottom: 0.65rem;
+}
+
+.distribution {
+  border-top: 1px solid rgba(84, 62, 44, 0.2);
+  padding-top: 0.7rem;
+}
+
+.distribution h3,
+.distribution h4 {
+  margin: 0;
+  font-family: "Fraunces", Georgia, serif;
+}
+
+.distribution h4 {
+  font-size: 0.94rem;
+  margin-bottom: 0.35rem;
+}
+
+.distribution-meta {
+  margin: 0.35rem 0 0.6rem;
+  font-size: 0.86rem;
+  opacity: 0.86;
+}
+
+.chart-wrap + .chart-wrap {
+  margin-top: 0.7rem;
+}
+
+.bar-chart {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.32rem;
+}
+
+.bar-chart li {
+  display: grid;
+  grid-template-columns: minmax(65px, 120px) 1fr auto;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.84rem;
+}
+
+.bar-track {
+  width: 100%;
+  height: 0.64rem;
+  border-radius: 999px;
+  background: rgba(30, 30, 30, 0.1);
+  overflow: hidden;
+}
+
+.bar {
+  height: 100%;
+  min-width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0e6a61, #2f9c90);
+}
+
+.bar.alt {
+  background: linear-gradient(90deg, #a95f1e, #d98b43);
+}
+
+.bar-chart .value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.gender-chart-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.gender-bar {
+  display: flex;
+  height: 2.5rem;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(30, 30, 30, 0.1);
+}
+
+.gender-segment {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: 600;
+  font-size: 0.8rem;
+  min-width: 0;
+  transition: opacity 200ms ease;
+}
+
+.gender-segment:hover {
+  opacity: 0.85;
+}
+
+.gender-segment.male {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+}
+
+.gender-segment.female {
+  background: linear-gradient(135deg, #ec4899, #db2777);
+}
+
+.gender-segment.unknown {
+  background: linear-gradient(135deg, #6b7280, #4b5563);
+}
+
+.gender-legend {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.legend-color {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 0.15rem;
+}
+
+.legend-color.male {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+}
+
+.legend-color.female {
+  background: linear-gradient(135deg, #ec4899, #db2777);
+}
+
+.legend-color.unknown {
+  background: linear-gradient(135deg, #6b7280, #4b5563);
+}
+
+.country-chart-container {
+  position: relative;
+  height: 300px;
+  width: 100%;
+  max-width: 100%;
 }
 
 .form-actions {
@@ -300,6 +503,11 @@ button.secondary {
   background: var(--bg-2);
   color: var(--ink);
   border-color: var(--panel-border);
+}
+
+button.danger {
+  background: var(--danger);
+  color: #fff;
 }
 
 .clean-status {
@@ -363,6 +571,74 @@ button.secondary {
   opacity: 0.45;
 }
 
+.help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2em;
+  height: 1.2em;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.75em;
+  font-weight: 700;
+  margin-left: 0.3rem;
+  cursor: help;
+}
+
+.search-help {
+  margin-top: 0.6rem;
+}
+
+.search-help details {
+  cursor: pointer;
+}
+
+.search-help summary {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--accent);
+  padding: 0.4rem 0.5rem;
+  margin: -0.4rem -0.5rem;
+  border-radius: 0.4rem;
+  transition: background 150ms ease;
+}
+
+.search-help summary:hover {
+  background: rgba(14, 106, 97, 0.08);
+}
+
+.search-help dl {
+  margin: 0.5rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.search-help dt {
+  font-weight: 600;
+  color: var(--ink);
+  margin-top: 0.4rem;
+}
+
+.search-help dt:first-child {
+  margin-top: 0;
+}
+
+.search-help dd {
+  margin: 0.2rem 0 0 0;
+  padding: 0 0 0 1rem;
+  color: rgba(31, 31, 25, 0.8);
+}
+
+.search-help code {
+  background: rgba(14, 106, 97, 0.1);
+  padding: 0.2rem 0.4rem;
+  border-radius: 0.3rem;
+  font-family: "Monaco", "Courier New", monospace;
+  font-size: 0.9em;
+  color: var(--accent);
+}
+
 @media (max-width: 900px) {
   .topbar,
   .meta {
@@ -374,6 +650,16 @@ button.secondary {
   }
 
   .person-list {
-    max-height: 35vh;
+    max-height: 38vh;
+  }
+
+  .bar-chart li {
+    grid-template-columns: minmax(60px, 90px) 1fr auto;
+  }
+}
+
+@media (min-width: 1450px) {
+  .content {
+    grid-template-columns: minmax(420px, 0.9fr) minmax(680px, 1.1fr);
   }
 }

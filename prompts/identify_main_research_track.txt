@@ -1,0 +1,33 @@
+You are an expert in academic conference structure and DBLP bibliographic data.
+
+Conference short name: {venue_short_name}
+Year: {year}
+DBLP venue prefix: {venue_prefix}
+
+The following venue/booktitle strings were found in our DBLP snapshot for publications
+under this DBLP venue prefix in {year}:
+
+{venue_strings}
+
+Task: identify which of these venue strings correspond to papers in the MAIN research track.
+
+The main research track is the primary technical/scientific track of the conference,
+sometimes called "technical papers", "research papers", or just the main proceedings.
+
+Do NOT include venue strings that correspond to:
+- NIER (New Ideas and Emerging Results) or similar short-paper tracks
+- Tool demonstrations, posters, or artifact evaluations
+- Workshops or co-located events
+- Doctoral symposia or student research competitions
+- Industry tracks or experience reports
+- Any supplementary, companion, or auxiliary proceedings volume
+
+Rules:
+- If only one venue string is present, include it (assume it is the main track).
+- If all venue strings clearly represent different volumes of the same main proceedings
+  (e.g., Volume 1 and Volume 2 of the same conference), include all of them.
+- Preserve the exact strings from the input list — do not paraphrase or modify them.
+
+Return a JSON object with exactly two keys:
+- "main_track_venues": list of strings from the input that represent the main research track
+- "reasoning": one or two sentences explaining your choices

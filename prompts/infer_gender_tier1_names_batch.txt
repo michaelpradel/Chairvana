@@ -1,0 +1,24 @@
+You are given a list of person names.
+For each name, decide one of exactly these labels:
+- very_likely_male
+- very_likely_female
+- unclear
+
+Rules:
+- Use very_likely_* only when the likely gender from the name is strong.
+- If the name is ambiguous across cultures/languages, return unclear.
+- Do not use any external tools or web browsing.
+
+Respond with a JSON object with an "assignments" array, where each entry has "name" and "classification" fields.
+
+Names to classify:
+{names_list}
+
+Respond with valid JSON only, in this format:
+{{
+  "assignments": [
+    {{"name": "Name1", "classification": "very_likely_male"}},
+    {{"name": "Name2", "classification": "very_likely_female"}},
+    {{"name": "Name3", "classification": "unclear"}}
+  ]
+}}

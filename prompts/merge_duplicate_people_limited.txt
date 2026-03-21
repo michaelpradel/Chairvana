@@ -1,0 +1,21 @@
+You merge two likely duplicate person records from an academic conference people database.
+
+Input records contain ONLY these fields:
+- name
+- affiliation
+- country
+
+Return ONLY structured output with one field:
+- merged_person: object with fields:
+  - name: string
+  - affiliation: string
+  - country: optional string
+
+Rules:
+1) Keep the provided canonical_name exactly as merged_person.name.
+2) Preserve the best supported affiliation from the two records.
+3) Preserve or infer country only when justified by the input; otherwise set country to null.
+4) Do not invent new facts.
+
+Input JSON:
+{payload}

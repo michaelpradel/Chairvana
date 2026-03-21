@@ -31,6 +31,37 @@ def normalize_whitespace(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def is_committee_panel_label(label: str) -> bool:
+    lowered = normalize_whitespace(label).lower()
+    if not lowered:
+        return False
+
+    committee_titles = (
+        "program committee",
+        "review committee",
+    )
+    if any(lowered == title or lowered.startswith(f"{title} ") for title in committee_titles):
+        return True
+
+    # Some venues prefix the panel title with the conference name, e.g.,
+    # "OOPSLA Review Committee".
+    if any(lowered.endswith(f" {title}") for title in committee_titles):
+        return True
+
+    return "program committee" in lowered and "technical papers" in lowered
+
+
+def estimate_member_signal(container: Tag) -> int:
+    # Prefer containers with person/profile-like structures.
+    media_cards = len(container.select("div.media-body h3"))
+    person_links = len(container.select("a[href*='/person/']")) + len(
+        container.select("a[href*='/profile/']")
+    )
+    table_rows = len(container.select("tr"))
+    list_items = len(container.select("li"))
+    return (media_cards * 4) + (person_links * 2) + table_rows + list_items
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Find and extract Program Committee members for a conference/year."
@@ -63,6 +94,25 @@ def is_researchr_url(url: str) -> bool:
     return netloc == RESEARCHR_DOMAIN or netloc.endswith(f".{RESEARCHR_DOMAIN}")
 
 
+def is_followable_committee_url(url: str, base_url: str) -> bool:
+    parsed = urlparse(url)
+    netloc = parsed.netloc.lower()
+    base_netloc = urlparse(base_url).netloc.lower()
+
+    if netloc == base_netloc or is_researchr_url(url):
+        return True
+
+    path = parsed.path.lower()
+    committee_markers = (
+        "/committee/",
+        "-program-committee",
+        "-review-committee",
+        "review-committee",
+        "program-committee",
+    )
+    return any(marker in path for marker in committee_markers)
+
+
 def download_html(url: str) -> str:
     logger.info(f"Downloading HTML from: {url}")
     request = Request(url, headers={"User-Agent": "Mozilla/5.0 (Chairvana PC Extractor)"})
@@ -91,12 +141,7 @@ def find_program_committee_container(
         if len(label) > 100:
             continue
 
-        lowered = label.lower()
-        if (
-            lowered == "program committee"
-            or lowered.startswith("program committee")
-            or ("program committee" in lowered and "technical papers" in lowered)
-        ):
+        if is_committee_panel_label(label):
             markers.append(tag)
             logger.debug(f"Found PC marker: {label}")
 
@@ -104,10 +149,20 @@ def find_program_committee_container(
         raise ValueError("Could not find a Program Committee marker in the page")
     logger.info(f"Found {len(markers)} potential Program Committee marker(s)")
 
+    best_target: Tag | None = None
+    best_score = -1
     for marker in markers:
         target = resolve_marker_target(soup, marker, base_url, visited_urls)
-        if target is not None:
-            return target
+        if target is None:
+            continue
+        score = estimate_member_signal(target)
+        if score > best_score:
+            best_score = score
+            best_target = target
+
+    if best_target is not None:
+        logger.info(f"Selected committee container with score {best_score}")
+        return best_target
 
     # Fallback: return the first marker if no explicit target can be resolved.
     return markers[0]
@@ -130,11 +185,19 @@ def resolve_marker_target(
             if isinstance(ancestor, Tag) and ancestor.name in {"section", "article", "div", "main"}:
                 return ancestor
 
-    # If the marker is a link to another page on researchr, follow it.
+    # If the marker is a link to another page, follow it when it still looks
+    # like a committee page.
     href = marker.get("href")
+    if not isinstance(href, str) or not href:
+        nested_link = marker.find("a", href=True)
+        if isinstance(nested_link, Tag):
+            nested_href = nested_link.get("href")
+            if isinstance(nested_href, str) and nested_href:
+                href = nested_href
+
     if isinstance(href, str) and href and not href.startswith("#"):
         next_url = urljoin(base_url, href)
-        if is_researchr_url(next_url):
+        if is_followable_committee_url(next_url, base_url):
             if next_url in visited_urls:
                 logger.debug(f"Skipping already-visited URL to avoid cycle: {next_url}")
                 return marker
@@ -144,12 +207,15 @@ def resolve_marker_target(
             except Exception:  # noqa: BLE001
                 logger.debug(f"Failed to download from {next_url}, using marker as fallback")
                 return marker
+            visited_urls.add(next_url)
             next_soup = BeautifulSoup(next_html, "html.parser")
-            try:
-                return find_program_committee_container(next_soup, next_url, visited_urls)
-            except Exception:  # noqa: BLE001
-                logger.debug(f"Failed to find PC container in {next_url}, using marker as fallback")
-                return marker
+            main = next_soup.find("main")
+            if isinstance(main, Tag):
+                return main
+            body = next_soup.body
+            if isinstance(body, Tag):
+                return body
+            return marker
 
     return marker
 
@@ -438,4 +504,4 @@ if __name__ == "__main__":
         raise
     except Exception as exc:  # noqa: BLE001
         logger.exception("An error occurred during execution:")
-        raise SystemExit(f"Error: {exc}") from exc
+        raise

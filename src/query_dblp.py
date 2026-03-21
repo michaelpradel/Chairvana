@@ -10,14 +10,18 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import re
 import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import DefaultDict, Sequence
+from typing import Any, DefaultDict, Sequence
 from xml.sax import handler, make_parser
 from xml.sax.handler import feature_external_ges
 from xml.sax.xmlreader import AttributesImpl, InputSource
+
+from pydantic import BaseModel
 
 TARGET_PUBLICATION_TAGS = {"article", "inproceedings"}
 TARGET_VENUE_PREFIXES = (
@@ -27,6 +31,21 @@ TARGET_VENUE_PREFIXES = (
     "conf/issta",
     "conf/oopsla",
 )
+PACMPL_PREFIX = "journals/pacmpl"
+
+# Years for which we resolve the main research track via LLM.
+MAIN_TRACK_YEARS: tuple[int, ...] = (2022, 2023, 2024, 2025, 2026)
+_MAIN_TRACK_CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "main_track_venues.json"
+
+# Module-level in-memory cache: venue_prefix -> year_str -> list[venue_string]
+_main_track_cache: dict[str, dict[str, list[str]]] | None = None
+
+
+class MainTrackResponse(BaseModel):
+    """Structured LLM response identifying main-track venue strings."""
+
+    main_track_venues: list[str]
+    reasoning: str
 
 
 @dataclass(slots=True)
@@ -36,6 +55,7 @@ class Publication:
     title: str | None
     year: int | None
     venue: str | None
+    issue: str | None
     authors: list[str]
 
 
@@ -64,6 +84,7 @@ def build_publication(data: dict[str, object]) -> Publication:
     key_value = data.get("key")
     title_value = data.get("title")
     year_value = data.get("year")
+    issue_value = data.get("number")
     authors_value = data.get("authors")
 
     return Publication(
@@ -72,10 +93,18 @@ def build_publication(data: dict[str, object]) -> Publication:
         title=title_value if isinstance(title_value, str) else None,
         year=year_value if isinstance(year_value, int) else None,
         venue=venue,
+        issue=issue_value if isinstance(issue_value, str) else None,
         authors=[author for author in authors_value if isinstance(author, str)]
         if isinstance(authors_value, list)
         else [],
     )
+
+
+def _is_oopsla_pacmpl_publication(publication: Publication) -> bool:
+    """Return True if publication is a PACMPL OOPSLA issue paper."""
+    if not publication.key or not publication.issue:
+        return False
+    return publication.key.lower().startswith(f"{PACMPL_PREFIX}/") and publication.issue.upper().startswith("OOPSLA")
 
 
 def _matches_target_venue(publication: Publication) -> bool:
@@ -85,6 +114,9 @@ def _matches_target_venue(publication: Publication) -> bool:
         for prefix in TARGET_VENUE_PREFIXES:
             if normalized_key == prefix or normalized_key.startswith(f"{prefix}/"):
                 return True
+
+    if _is_oopsla_pacmpl_publication(publication):
+        return True
 
     # Optional fallback to cover preprocessed records without DBLP keys.
     if publication.venue:
@@ -97,7 +129,7 @@ def _matches_target_venue(publication: Publication) -> bool:
 class DblpFilterHandler(handler.ContentHandler):
     """Stream DBLP XML and emit filtered publications as JSONL."""
 
-    text_fields = {"author", "title", "year", "journal", "booktitle", "school", "publisher"}
+    text_fields = {"author", "title", "year", "journal", "booktitle", "school", "publisher", "number"}
 
     def __init__(self, output_file) -> None:
         super().__init__()
@@ -120,6 +152,7 @@ class DblpFilterHandler(handler.ContentHandler):
                 "booktitle": None,
                 "school": None,
                 "publisher": None,
+                "number": None,
                 "authors": [],
             }
             return
@@ -212,9 +245,40 @@ class DblpQueryEngine:
             raise FileNotFoundError(f"Missing filtered DBLP JSONL: {self.filtered_jsonl_path}")
 
         self._author_index: dict[str, list[Publication]] | None = None
+        self._author_canonical_index: dict[str, list[Publication]] | None = None
         self.index_build_seconds: float | None = None
         if preload_index:
             self.build_author_index()
+
+    @staticmethod
+    def _canonical_author_name(author_name: str) -> str:
+        normalized = normalize_whitespace(author_name)
+        # DBLP sometimes appends disambiguation suffixes like "0001".
+        return re.sub(r"\s\d{4}$", "", normalized)
+
+    @staticmethod
+    def _publication_identity(publication: Publication) -> tuple[Any, ...]:
+        if publication.key:
+            return ("key", publication.key)
+        return (
+            "fallback",
+            publication.title,
+            publication.year,
+            publication.venue,
+            tuple(publication.authors),
+        )
+
+    @classmethod
+    def _dedupe_publications(cls, publications: list[Publication]) -> list[Publication]:
+        deduped: list[Publication] = []
+        seen: set[tuple[Any, ...]] = set()
+        for publication in publications:
+            identity = cls._publication_identity(publication)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            deduped.append(publication)
+        return deduped
 
     def build_author_index(self, force: bool = False) -> dict[str, list[Publication]]:
         """Build a full in-memory author->publications index from filtered JSONL."""
@@ -223,6 +287,7 @@ class DblpQueryEngine:
 
         started = time.perf_counter()
         matches_by_author: DefaultDict[str, list[Publication]] = defaultdict(list)
+        canonical_matches_by_author: DefaultDict[str, list[Publication]] = defaultdict(list)
 
         with self.filtered_jsonl_path.open("r", encoding="utf-8") as input_file:
             for line in input_file:
@@ -236,14 +301,21 @@ class DblpQueryEngine:
                     title=row.get("title") if isinstance(row.get("title"), str) else None,
                     year=row.get("year") if isinstance(row.get("year"), int) else None,
                     venue=row.get("venue") if isinstance(row.get("venue"), str) else None,
+                    issue=row.get("issue") if isinstance(row.get("issue"), str) else None,
                     authors=[a for a in row.get("authors", []) if isinstance(a, str)]
                     if isinstance(row.get("authors"), list)
                     else [],
                 )
                 for author in publication.authors:
-                    matches_by_author[author].append(publication)
+                    normalized_author = normalize_whitespace(author)
+                    matches_by_author[normalized_author].append(publication)
+                    canonical_matches_by_author[self._canonical_author_name(normalized_author)].append(publication)
 
         self._author_index = dict(matches_by_author)
+        self._author_canonical_index = {
+            author: self._dedupe_publications(publications)
+            for author, publications in canonical_matches_by_author.items()
+        }
         self.index_build_seconds = time.perf_counter() - started
         return self._author_index
 
@@ -253,7 +325,15 @@ class DblpQueryEngine:
         if self._author_index is None:
             self.build_author_index()
 
-        publications = list(self._author_index.get(author_name, [])) if self._author_index else []
+        publications: list[Publication] = []
+        if self._author_index is not None:
+            publications.extend(self._author_index.get(author_name, []))
+
+        canonical_name = self._canonical_author_name(author_name)
+        if self._author_canonical_index is not None:
+            publications.extend(self._author_canonical_index.get(canonical_name, []))
+
+        publications = self._dedupe_publications(publications)
         return publications[:max_results] if max_results is not None else publications
 
     def query_authors(
@@ -268,7 +348,15 @@ class DblpQueryEngine:
 
         result: dict[str, list[Publication]] = {}
         for author in normalized_authors:
-            publications = list(self._author_index.get(author, [])) if self._author_index else []
+            publications: list[Publication] = []
+            if self._author_index is not None:
+                publications.extend(self._author_index.get(author, []))
+
+            canonical_name = self._canonical_author_name(author)
+            if self._author_canonical_index is not None:
+                publications.extend(self._author_canonical_index.get(canonical_name, []))
+
+            publications = self._dedupe_publications(publications)
             if max_results_per_author is not None:
                 publications = publications[:max_results_per_author]
             result[author] = publications
@@ -317,25 +405,52 @@ class DblpQueryEngine:
             self.build_author_index()
 
         result: dict[str, list[Publication]] = {}
-        author_index = self._author_index
-        if author_index is None:
+        canonical_author_index = self._author_canonical_index
+        if canonical_author_index is None:
             return result
 
-        for author, publications in author_index.items():
+        for author, publications in canonical_author_index.items():
             matching = [
                 pub
                 for pub in publications
                 if any(self._publication_matches_venue(pub, prefix.lower()) for prefix in TARGET_VENUE_PREFIXES)
                 and self._year_in_range(pub.year, min_year, max_year)
             ]
+            matching = self._dedupe_publications(matching)
             if len(matching) >= min_publications:
                 result[author] = matching
 
         return result
 
+    def get_distinct_venue_strings(self, venue_prefix: str, year: int) -> list[str]:
+        """Return sorted distinct venue (booktitle) strings for a venue prefix and year.
+
+        Deduplicates by publication key so co-authored papers are counted once.
+        """
+        if self._author_index is None:
+            self.build_author_index()
+
+        norm_prefix = venue_prefix.lower()
+        seen_keys: set[str] = set()
+        venue_strings: set[str] = set()
+
+        for pubs in (self._author_index or {}).values():
+            for pub in pubs:
+                if pub.key is None or pub.key in seen_keys:
+                    continue
+                if pub.year == year and self._publication_matches_venue(pub, norm_prefix):
+                    seen_keys.add(pub.key)
+                    if pub.venue:
+                        venue_strings.add(pub.venue)
+
+        return sorted(venue_strings)
+
     @staticmethod
     def _publication_matches_venue(publication: Publication, normalized_venue_prefix: str) -> bool:
         """Check if a publication matches a venue prefix."""
+        if normalized_venue_prefix == "conf/oopsla" and _is_oopsla_pacmpl_publication(publication):
+            return True
+
         if publication.key:
             normalized_key = publication.key.lower()
             return normalized_key == normalized_venue_prefix or normalized_key.startswith(
@@ -397,6 +512,247 @@ def get_prolific_authors(
         preload_index=False,
     )
     return engine.query_prolific_authors_in_target_venues(min_publications, min_year, max_year)
+
+
+def _get_main_track_cache() -> dict[str, dict[str, list[str]]]:
+    """Return the in-memory main-track cache, loading from disk on first call."""
+    global _main_track_cache
+    if _main_track_cache is None:
+        if _MAIN_TRACK_CACHE_PATH.exists():
+            _main_track_cache = json.loads(_MAIN_TRACK_CACHE_PATH.read_text(encoding="utf-8"))
+        else:
+            _main_track_cache = {}
+    cache = _main_track_cache
+    if cache is None:
+        raise RuntimeError("Main-track cache failed to initialize")
+    return cache
+
+
+def _persist_main_track_cache() -> None:
+    """Write the current in-memory cache to disk."""
+    cache = _get_main_track_cache()
+    _MAIN_TRACK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _MAIN_TRACK_CACHE_PATH.write_text(
+        json.dumps(cache, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _resolve_main_track_via_llm(
+    venue_prefix: str,
+    year: int,
+    engine: DblpQueryEngine,
+) -> list[str] | None:
+    """Ask the LLM which venue strings belong to the main research track.
+
+    Returns the accepted venue strings, or None when the filtered JSONL
+    contains no publications for this (venue_prefix, year) pair.
+    Caches the result on disk before returning.
+    """
+    from llm_queries import get_openai_client, parse_structured_response  # noqa: PLC0415
+
+    venue_strings = engine.get_distinct_venue_strings(venue_prefix, year)
+    if not venue_strings:
+        return None
+
+    prompt_path = Path(__file__).resolve().parent.parent / "prompts" / "identify_main_research_track.txt"
+    prompt_template = prompt_path.read_text(encoding="utf-8")
+
+    venue_short = venue_prefix.split("/")[-1].upper()
+    venue_list_str = "\n".join(f"- {v}" for v in venue_strings)
+    input_text = prompt_template.format(
+        venue_prefix=venue_prefix,
+        venue_short_name=venue_short,
+        year=year,
+        venue_strings=venue_list_str,
+    )
+
+    response = parse_structured_response(
+        input_text=input_text,
+        response_model=MainTrackResponse,
+        client=get_openai_client(),
+    )
+
+    cache = _get_main_track_cache()
+    cache.setdefault(venue_prefix, {})[str(year)] = response.main_track_venues
+    _persist_main_track_cache()
+
+    return response.main_track_venues
+
+
+def get_main_track_venues(
+    venue_prefix: str,
+    year: int,
+    engine: DblpQueryEngine,
+) -> list[str] | None:
+    """Return accepted venue strings for the main research track of a venue/year pair.
+
+    Checks the on-disk cache first.  If no entry exists, queries the LLM,
+    stores the result, and returns it.  Returns None when no publications for
+    this (venue_prefix, year) are found in the filtered JSONL (caller should
+    fall back to prefix-based matching).
+    """
+    if year not in MAIN_TRACK_YEARS:
+        return None
+
+    cache = _get_main_track_cache()
+    cached = cache.get(venue_prefix, {}).get(str(year))
+    if cached is not None:
+        return cached
+
+    return _resolve_main_track_via_llm(venue_prefix, year, engine)
+
+
+def is_main_track_publication(
+    pub: Publication,
+    venue_prefix: str,
+    engine: DblpQueryEngine,
+) -> bool:
+    """Return True if pub is in target venue AND in the main research track.
+
+    Falls back to prefix-only matching when cache data is unavailable (no
+    publications found for that venue/year, or year outside MAIN_TRACK_YEARS).
+    """
+    if not _publication_in_target_venue(pub, venue_prefix):
+        return False
+
+    # OOPSLA papers in PACMPL (issue OOPSLA*) should count as main-track by definition.
+    if venue_prefix.lower() == "conf/oopsla" and _is_oopsla_pacmpl_publication(pub):
+        return True
+
+    if pub.year is None:
+        return False
+
+    main_venues = get_main_track_venues(venue_prefix, pub.year, engine)
+
+    # No data for this venue+year — conservatively treat pub as in-scope.
+    if main_venues is None:
+        return True
+
+    # No venue string on the pub — conservatively include it.
+    if pub.venue is None:
+        return True
+
+    return pub.venue in main_venues
+
+
+def get_target_publications_for_author(
+    person_name: str,
+    engine: DblpQueryEngine,
+    current_year: int | None = None,
+    max_years_back: int = 5,
+) -> list[Publication]:
+    """Return target-venue main-track publications for a person in the year window."""
+    if current_year is None:
+        current_year = datetime.now().year
+
+    min_year = current_year - max_years_back
+    publications = engine.query_author(person_name)
+
+    return [
+        pub
+        for pub in publications
+        if pub.year is not None
+        and pub.year >= min_year
+        and pub.year <= current_year
+        and any(is_main_track_publication(pub, prefix, engine) for prefix in TARGET_VENUE_PREFIXES)
+    ]
+
+
+def create_publication_summary(
+    person_name: str,
+    current_year: int | None = None,
+    max_years_back: int = 5,
+    filtered_jsonl_path: Path | str | None = None,
+    engine: DblpQueryEngine | None = None,
+) -> dict[str, Any] | None:
+    """Create a publication summary for a person from target venues.
+
+    Summarizes papers by this person in target venues from the last N years,
+    with counts by venue and year range.
+
+    Args:
+        person_name: The person's name to search for in DBLP
+        current_year: The year to use as reference (default: current year)
+        max_years_back: How many years back to include (default: 5)
+        filtered_jsonl_path: Path to filtered DBLP JSONL (default: data/dblp_filtered.jsonl)
+        engine: Existing query engine to reuse instead of rebuilding the index
+
+    Returns:
+        A dict with venue and year breakdown, or None if no papers found.
+        Structure: {
+            "total": <int>,
+            "by_venue": {
+                "icse": <int>,
+                "oopsla": <int>,
+                ...
+            },
+            "year_range": [<min_year>, <max_year>]
+        }
+    """
+    if current_year is None:
+        current_year = datetime.now().year
+
+    if engine is None:
+        engine = DblpQueryEngine(filtered_jsonl_path=filtered_jsonl_path, preload_index=False)
+
+    target_publications = get_target_publications_for_author(
+        person_name,
+        engine,
+        current_year=current_year,
+        max_years_back=max_years_back,
+    )
+
+    if not target_publications:
+        return None
+
+    # Count by venue
+    venue_counts: dict[str, int] = defaultdict(int)
+    for pub in target_publications:
+        venue_key = _extract_venue_key(pub)
+        if venue_key:
+            venue_counts[venue_key] += 1
+
+    # Extract year range
+    years = [pub.year for pub in target_publications if pub.year is not None]
+    year_range = [min(years), max(years)] if years else None
+
+    return {
+        "total": len(target_publications),
+        "by_venue": dict(venue_counts),
+        "year_range": year_range,
+    }
+
+
+def _publication_in_target_venue(pub: Publication, venue_prefix: str) -> bool:
+    """Check if a publication is in a target venue."""
+    if venue_prefix.lower() == "conf/oopsla" and _is_oopsla_pacmpl_publication(pub):
+        return True
+
+    if pub.key:
+        normalized_key = pub.key.lower()
+        normalized_prefix = venue_prefix.lower()
+        return normalized_key == normalized_prefix or normalized_key.startswith(f"{normalized_prefix}/")
+    return False
+
+
+def _extract_venue_key(pub: Publication) -> str | None:
+    """Extract a clean venue key from a publication.
+
+    Returns the first path component of the DBLP key, e.g. 'icse' from 'conf/icse/2024'.
+    """
+    if not pub.key:
+        return None
+
+    # DBLP keys like "conf/icse/2024" -> extract "icse"
+    parts = pub.key.lower().split("/")
+    if len(parts) >= 2 and parts[0] == "conf":
+        return parts[1]
+
+    if _is_oopsla_pacmpl_publication(pub):
+        return "oopsla"
+
+    return None
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -543,7 +899,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception as exc:  # noqa: BLE001
-        raise SystemExit(f"Error: {exc}") from exc
+    raise SystemExit(main())

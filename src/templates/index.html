@@ -11,6 +11,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
   </head>
   <body>
     <div class="backdrop"></div>
@@ -21,11 +22,11 @@
           <p>Where PC Chairs Reach Nirvana</p>
         </div>
         <div class="meta">
-          <span>{{ people | length }} people loaded</span>
+          <span>{{ total_people_count }} people loaded</span>
           <div class="history-controls" aria-label="people history navigation">
             {% if older_history_commit and not clean_running %}
             <a
-              href="{{ url_for('index', q=query, selected=selected_name, history=older_history_commit) }}"
+              href="{{ url_for('index', q=query, selected=selected_name, history=older_history_commit, dist_tags=distribution.input) }}"
               class="history-btn"
               title="Show the previous committed version of people.jsonl"
             >&larr; Older</a>
@@ -43,7 +44,7 @@
 
             {% if newer_history_commit and not clean_running %}
             <a
-              href="{{ url_for('index', q=query, selected=selected_name, history=newer_history_commit) }}"
+              href="{{ url_for('index', q=query, selected=selected_name, history=newer_history_commit, dist_tags=distribution.input) }}"
               class="history-btn"
               title="Show the next committed version of people.jsonl"
             >Newer &rarr;</a>
@@ -51,7 +52,7 @@
             <span class="history-btn disabled">Newer &rarr;</span>
             {% endif %}
           </div>
-          <a href="{{ url_for('index') }}" class="reload-btn" title="Reload from store">&#8635; Reload</a>
+          <a href="{{ url_for('index', dist_tags=distribution.input) }}" class="reload-btn" title="Reload from store">&#8635; Reload</a>
         </div>
       </header>
 
@@ -67,24 +68,58 @@
 
       <section class="content">
         <aside class="panel list-panel">
+          <h2>Search People</h2>
+          <p class="search-meta">{{ matched_people_count }} matching people</p>
           <form method="get" action="{{ url_for('index') }}" class="search">
             {% if history_commit %}
             <input type="hidden" name="history" value="{{ history_commit }}" />
             {% endif %}
-            <label for="q">Search by name or affiliation</label>
-            <input id="q" name="q" value="{{ query }}" placeholder="e.g., CISPA" />
+            <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
+            <label for="q" title="Search by name, affiliation, country, flags, gender, or publication/PC membership count">
+              Search <span class="help-icon">?</span>
+            </label>
+            <input 
+              id="q" 
+              name="q" 
+              value="{{ query }}" 
+              placeholder="e.g., CISPA male pubs>5 pcs>=3"
+              title="Supported filters: text (name/affiliation/country), 'male'/'female', 'pubs>N', 'pcs>N' (combine with spaces)"
+            />
             <button type="submit">Filter</button>
+            <div class="search-help">
+              <details>
+                <summary>Search syntax help</summary>
+                <dl>
+                  <dt>Text search</dt>
+                  <dd>Matches name, affiliation, country, or flags. E.g., <code>CISPA</code>, <code>Singapore</code></dd>
+                  <dt>Gender</dt>
+                  <dd>Search by <code>male</code> or <code>female</code></dd>
+                  <dt>Publications</dt>
+                  <dd>Filter by publication count: <code>pubs>5</code>, <code>pubs<=10</code>, <code>pubs=7</code></dd>
+                  <dt>PC memberships</dt>
+                  <dd>Filter by PC count: <code>pcs>3</code>, <code>pcs>=2</code>, <code>pcs<5</code></dd>
+                  <dt>Combine filters</dt>
+                  <dd>Multiple filters with AND logic: <code>male pubs>5 pcs>=2</code></dd>
+                </dl>
+              </details>
+            </div>
           </form>
 
           <ul class="person-list">
             {% for person in people %}
             <li>
               <a
-                href="{{ url_for('index', q=query, selected=person['name'], history=history_commit) }}"
+                href="{{ url_for('index', q=query, selected=person['name'], history=history_commit, dist_tags=distribution.input) }}"
                 class="person-link {% if selected_person and selected_person['name'] == person['name'] %}active{% endif %}"
               >
                 <strong>{{ person['name'] }}</strong>
                 <span>{{ person.get('affiliation', 'Unknown affiliation') }}</span>
+                <span class="person-meta-inline">
+                  {{ person.get('gender', 'unknown') }}
+                  {% if person.get('country') %}
+                  · {{ person.get('country') }}
+                  {% endif %}
+                </span>
               </a>
             </li>
             {% endfor %}
@@ -94,77 +129,212 @@
           </ul>
         </aside>
 
-        <section class="panel edit-panel">
-          {% if selected_person %}
-          <h2>Edit Person</h2>
-          {% if not history_is_head and history_entry %}
-          <div class="history-notice">
-            Viewing snapshot {{ history_entry.short_commit }}. Saving from this view will discard newer `people.jsonl` commits and replace them with a new commit.
-          </div>
-          {% endif %}
-          {% if clean_running %}
-          <div class="clean-status running" id="clean-banner">
-            <span class="spinner"></span>
-            Cleaning affiliation data&hellip; other edits are disabled.
-          </div>
-          {% endif %}
-          <form method="post" action="{{ url_for('update_person') }}" class="editor{{ ' is-locked' if clean_running else '' }}">
-            <input type="hidden" name="original_name" value="{{ selected_person['name'] }}" />
-            <input type="hidden" name="q" value="{{ query }}" />
-            <input type="hidden" name="history" value="{{ history_commit or '' }}" />
-
-            <label for="name">Name</label>
-            <input id="name" name="name" value="{{ selected_person['name'] }}" required />
-
-            <label for="affiliation">Affiliation</label>
-            <input
-              id="affiliation"
-              name="affiliation"
-              value="{{ selected_person.get('affiliation', '') }}"
-            />
-
-            <label for="flags">Flags (space or comma separated)</label>
-            <input
-              id="flags"
-              name="flags"
-              value="{{ selected_person.get('flags', []) | join(' ') }}"
-              placeholder="#invite #redflag"
-            />
-
-            <dl class="details">
-              <dt>Known affiliations</dt>
-              <dd>{{ selected_person.get('affiliations', []) | join(', ') }}</dd>
-              <dt>Flags</dt>
-              <dd>
-                {% if selected_person.get('flags') %}
-                {% for flag in selected_person.get('flags', []) %}
-                <span class="tag">{{ flag }}</span>
-                {% endfor %}
-                {% else %}
-                None
-                {% endif %}
-              </dd>
-              <dt>PC memberships</dt>
-              <dd>
-                {% if selected_person.get('pc_memberships') %}
-                {% for m in selected_person.get('pc_memberships', []) %}
-                <span class="tag">{{ m.get('conference', '?') }} {{ m.get('year', '?') }}</span>
-                {% endfor %}
-                {% else %}
-                None
-                {% endif %}
-              </dd>
-            </dl>
-
-            <div class="form-actions">
-              <button type="submit" class="primary"{% if clean_running %} disabled{% endif %}>Save changes</button>
-              <button type="submit" formaction="{{ url_for('clean_person') }}" class="secondary"{% if clean_running %} disabled{% endif %}>Auto-clean</button>
+        <div class="right-column">
+          <section class="panel edit-panel">
+            {% if selected_person %}
+            <h2>Edit Person</h2>
+            {% if not history_is_head and history_entry %}
+            <div class="history-notice">
+              Viewing snapshot {{ history_entry.short_commit }}. Saving from this view will discard newer `people.jsonl` commits and replace them with a new commit.
             </div>
-          </form>
-          {% else %}
-          <p>Select a person to edit.</p>
-          {% endif %}
-        </section>
+            {% endif %}
+            {% if clean_running %}
+            <div class="clean-status running" id="clean-banner">
+              <span class="spinner"></span>
+              Cleaning affiliation data&hellip; other edits are disabled.
+            </div>
+            {% endif %}
+            <form method="post" action="{{ url_for('update_person') }}" class="editor{{ ' is-locked' if clean_running else '' }}">
+              <input type="hidden" name="original_name" value="{{ selected_person['name'] }}" />
+              <input type="hidden" name="q" value="{{ query }}" />
+              <input type="hidden" name="history" value="{{ history_commit or '' }}" />
+              <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
+
+              <label for="name">Name</label>
+              <input id="name" name="name" value="{{ selected_person['name'] }}" required />
+
+              <label for="affiliation">Affiliation</label>
+              <input
+                id="affiliation"
+                name="affiliation"
+                value="{{ selected_person.get('affiliation', '') }}"
+              />
+
+              <label for="homepage">Homepage</label>
+              <input
+                id="homepage"
+                name="homepage"
+                value="{{ selected_person.get('homepage', '') }}"
+                placeholder="https://example.edu/~person"
+              />
+              {% if selected_person.get('homepage') %}
+              <div class="field-note">
+                Current: <a href="{{ selected_person.get('homepage') }}" target="_blank" rel="noopener noreferrer">{{ selected_person.get('homepage') }}</a>
+              </div>
+              {% endif %}
+
+              <label for="gender">Gender</label>
+              <input
+                id="gender"
+                name="gender"
+                value="{{ selected_person.get('gender', '') }}"
+                placeholder="female, male, unknown"
+              />
+
+              <label for="country">Country</label>
+              <input
+                id="country"
+                name="country"
+                value="{{ selected_person.get('country', '') }}"
+                placeholder="US, DE, SG"
+              />
+
+              <label for="flags">Flags (space or comma separated)</label>
+              <input
+                id="flags"
+                name="flags"
+                value="{{ selected_person.get('flags', []) | join(' ') }}"
+                placeholder="#invite #redflag"
+              />
+
+              <dl class="details">
+                <dt>PC memberships</dt>
+                <dd>
+                  {% if selected_person.get('pc_memberships') %}
+                  {% for m in selected_person.get('pc_memberships', []) %}
+                  <span class="tag">{{ m.get('conference', '?') }} {{ m.get('year', '?') }}</span>
+                  {% endfor %}
+                  {% else %}
+                  None
+                  {% endif %}
+                </dd>
+                <dt>Publications</dt>
+                <dd>
+                  {% set pub_summary = selected_person.get('publication_summary') %}
+                  {% if publication_display_counts %}
+                  {% for venue_label, count in publication_display_counts %}
+                  <span class="tag">{{ venue_label }}: {{ count }}</span>
+                  {% endfor %}
+                  <span class="tag-secondary">Total: {{ pub_summary.get('total', 0) }}{% if pub_summary.get('year_range') %} ({{ pub_summary['year_range'][0] }}–{{ pub_summary['year_range'][1] }}){% endif %}</span>
+                  {% else %}
+                  None
+                  {% endif %}
+                </dd>
+              </dl>
+
+              <div class="form-actions">
+                <button type="submit" class="primary"{% if clean_running %} disabled{% endif %}>Save changes</button>
+                <button type="submit" formaction="{{ url_for('delete_person') }}" class="danger"{% if clean_running %} disabled{% endif %} onclick="return confirm('Are you sure you want to delete {{ selected_person['name'] | escape }}? This cannot be undone.');">Delete person</button>
+              </div>
+            </form>
+            {% else %}
+            <p>Select a person to edit.</p>
+            {% endif %}
+          </section>
+
+          <section class="panel distribution-panel" aria-label="Tag distribution tools">
+            <h2>Distribution</h2>
+            <form method="get" action="{{ url_for('index') }}" class="search chart-filter">
+              {% if history_commit %}
+              <input type="hidden" name="history" value="{{ history_commit }}" />
+              {% endif %}
+              <input type="hidden" name="q" value="{{ query }}" />
+              {% if selected_person %}
+              <input type="hidden" name="selected" value="{{ selected_person['name'] }}" />
+              {% endif %}
+              <label for="dist_tags">Distribution tags</label>
+              <input id="dist_tags" name="dist_tags" value="{{ distribution.input }}" placeholder="#invited #areachair" />
+              <button type="submit">Update charts</button>
+            </form>
+
+            <section class="distribution" aria-label="Gender and country distribution for selected tags">
+              <p class="distribution-meta">
+                {{ distribution.matched_count }} people with
+                {% for tag in distribution.selected_tags %}
+                <span class="tag">{{ tag }}</span>
+                {% endfor %}
+              </p>
+
+              <div class="chart-wrap">
+                <h4>Gender</h4>
+                {% if distribution.gender %}
+                <div class="gender-chart-container">
+                  <div class="gender-bar" id="genderBar">
+                    {% set gender_total = distribution.gender.values() | sum %}
+                    {% set male_pct = (distribution.gender.get('male', 0) / gender_total * 100) if gender_total else 0 %}
+                    {% set female_pct = (distribution.gender.get('female', 0) / gender_total * 100) if gender_total else 0 %}
+                    {% set unknown_pct = (distribution.gender.get('unknown', 0) / gender_total * 100) if gender_total else 0 %}
+                    <div class="gender-segment male" style="width: {{ male_pct }}%" title="Male: {{ distribution.gender.get('male', 0) }}"></div>
+                    <div class="gender-segment female" style="width: {{ female_pct }}%" title="Female: {{ distribution.gender.get('female', 0) }}"></div>
+                    <div class="gender-segment unknown" style="width: {{ unknown_pct }}%" title="Unknown: {{ distribution.gender.get('unknown', 0) }}"></div>
+                  </div>
+                  <div class="gender-legend">
+                    <div class="legend-item"><span class="legend-color male"></span> Male ({{ distribution.gender.get('male', 0) }})</div>
+                    <div class="legend-item"><span class="legend-color female"></span> Female ({{ distribution.gender.get('female', 0) }})</div>
+                    <div class="legend-item"><span class="legend-color unknown"></span> Unknown ({{ distribution.gender.get('unknown', 0) }})</div>
+                  </div>
+                </div>
+                {% else %}
+                <p class="empty">No matching records.</p>
+                {% endif %}
+              </div>
+
+              <div class="chart-wrap">
+                <h4>Country (top 12)</h4>
+                {% if distribution.country %}
+                <div class="country-chart-container">
+                  <canvas id="countryChart" style="max-height: 300px;"></canvas>
+                </div>
+                <script>
+                  (function() {
+                    var countryData = {{ distribution.country | tojson }};
+                    var labels = Object.keys(countryData);
+                    var values = Object.values(countryData);
+                    
+                    var colors = [
+                      '#0e6a61', '#1a8e7e', '#29b5a0', '#3dc9bd', '#52d9ce',
+                      '#70e5d8', '#8beee4', '#a7f5ef', '#c9ebe6', '#d9f2f0',
+                      '#e6f8f6', '#f0fbf9'
+                    ];
+                    
+                    var ctx = document.getElementById('countryChart').getContext('2d');
+                    new Chart(ctx, {
+                      type: 'doughnut',
+                      data: {
+                        labels: labels,
+                        datasets: [{
+                          data: values,
+                          backgroundColor: colors.slice(0, labels.length),
+                          borderColor: '#f6f1e9',
+                          borderWidth: 2
+                        }]
+                      },
+                      options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                          legend: {
+                            position: 'right',
+                            labels: {
+                              font: { family: '"Chivo", sans-serif', size: 12 },
+                              padding: 12,
+                              color: '#1f1f19',
+                              usePointStyle: true,
+                              pointStyle: 'circle'
+                            }
+                          }
+                        }
+                      }
+                    });
+                  })();
+                </script>
+                {% else %}
+                <p class="empty">No matching records.</p>
+                {% endif %}
+              </div>
+            </section>
+          </section>
+        </div>
       </section>
     </main>
   <script>
@@ -174,6 +344,8 @@
 
     var selectedName = {{ selected_person['name'] | tojson if selected_person else 'null' }};
     var query = {{ query | tojson }};
+    var historyCommit = {{ history_commit | tojson }};
+    var distTags = {{ distribution.input | tojson }};
     var bannerEl = document.getElementById('clean-banner');
     var editorEl = document.querySelector('.editor');
 
@@ -196,7 +368,9 @@
         setTimeout(function () {
           window.location.assign(
             '/?q=' + encodeURIComponent(query || '') +
-            '&selected=' + encodeURIComponent(resultName || '')
+            '&selected=' + encodeURIComponent(resultName || '') +
+            '&dist_tags=' + encodeURIComponent(distTags || '') +
+            (historyCommit ? '&history=' + encodeURIComponent(historyCommit) : '')
           );
         }, 1500);
       }

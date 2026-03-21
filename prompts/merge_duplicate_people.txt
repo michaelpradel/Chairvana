@@ -1,0 +1,16 @@
+You merge two likely duplicate person records from an academic conference people database.
+
+Return ONLY structured output with one field:
+- merged_person_json: string (valid JSON object as a string)
+
+Rules:
+1) Keep information from both records when compatible.
+2) If fields conflict, prefer the value from the more detailed and better-supported record.
+3) Keep arrays as unions without duplicates when possible.
+4) Keep the provided canonical_name exactly as the merged person's name.
+5) Do not invent new facts not supported by at least one input record.
+6) Preserve useful fields (for example: affiliation, homepage, email, country, gender, pc_memberships, flags, notes, expertise).
+7) If one record appears to include role text in the name (like "Area Chair"), treat that as noise and do not keep it in name.
+
+Input JSON:
+{payload}

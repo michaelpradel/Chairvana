@@ -182,7 +182,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception as exc:  # noqa: BLE001
-        raise SystemExit(f"Error: {exc}") from exc
+    raise SystemExit(main())

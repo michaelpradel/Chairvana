@@ -27,13 +27,27 @@ from web_search import find_homepage_and_email
 TIER1_NAME_GENDER_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "infer_gender_tier1_name.txt"
 )
+TIER1_BATCH_NAME_GENDER_PROMPT_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "infer_gender_tier1_names_batch.txt"
+)
 TIER2_HOMEPAGE_GENDER_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "infer_gender_tier2_homepage.txt"
 )
+GENDER_SAVE_INTERVAL = 10
 
 
 class Tier1NameGenderResult(BaseModel):
     classification: Literal["very_likely_male", "very_likely_female", "unclear"]
+
+
+class GenderAssignment(BaseModel):
+    name: str
+    classification: Literal["very_likely_male", "very_likely_female", "unclear"]
+
+
+class Tier1BatchNameGenderResult(BaseModel):
+    """Batch result with list of name-to-gender assignments."""
+    assignments: list[GenderAssignment]
 
 
 class Tier2HomepageGenderResult(BaseModel):
@@ -99,6 +113,15 @@ def _tier1_prompt(name: str) -> str:
     return template.format(name=name)
 
 
+def _tier1_batch_prompt(names: list[str]) -> str:
+    try:
+        template = TIER1_BATCH_NAME_GENDER_PROMPT_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Missing prompt template: {TIER1_BATCH_NAME_GENDER_PROMPT_PATH}") from exc
+    names_list = "\n".join(f"- {name}" for name in names)
+    return template.format(names_list=names_list)
+
+
 def _tier2_prompt(name: str, homepage: str) -> str:
     try:
         template = TIER2_HOMEPAGE_GENDER_PROMPT_PATH.read_text(encoding="utf-8")
@@ -121,6 +144,44 @@ def infer_gender_tier1(name: str, model: str) -> str | None:
     if parsed.classification == "very_likely_female":
         return "female"
     return None
+
+
+def infer_gender_tier1_batch(names: list[str], model: str) -> dict[str, str | None]:
+    """Query tier1 gender for up to 50 names in a single batch request.
+    
+    Args:
+        names: List of names to classify (max 50)
+        model: OpenAI model to use
+        
+    Returns:
+        dict mapping each name to gender ("male", "female") or None if "unclear"
+    """
+    if not names:
+        return {}
+    
+    if len(names) > 50:
+        raise ValueError(f"Batch size exceeds 50: {len(names)}")
+    
+    print(f"[LLM][Tier 1 Batch] Querying name-only gender for {len(names)} names")
+    parsed = parse_structured_response(
+        input_text=_tier1_batch_prompt(names),
+        response_model=Tier1BatchNameGenderResult,
+        model=model,
+    )
+    
+    result = {}
+    for assignment in parsed.assignments:
+        name = assignment.name
+        classification = assignment.classification
+        print(f"[LLM][Tier 1 Batch] Classification for {name}: {classification}")
+        if classification == "very_likely_male":
+            result[name] = "male"
+        elif classification == "very_likely_female":
+            result[name] = "female"
+        else:
+            result[name] = None
+    
+    return result
 
 
 def infer_gender_from_homepage(name: str, homepage: str, model: str) -> str:
@@ -146,16 +207,23 @@ def _ensure_homepage(person: dict[str, Any], store: PeopleStore) -> dict[str, An
 
     print(f"[Web] No homepage for {name}; querying homepage/email")
     resolved = find_homepage_and_email(name)
-    updates = {
-        "homepage": resolved.homepage,
-        "email": resolved.email,
-    }
+    updates: dict[str, str] = {}
+    if resolved.homepage.strip():
+        updates["homepage"] = resolved.homepage
+    if resolved.email.strip():
+        updates["email"] = resolved.email
+
+    if not updates:
+        print(f"[Web][Warn] Could not resolve homepage/email for {name}")
+        return person
+
     updated = store.update_person(name, updates)
-    print(f"[Store] Saved homepage/email for {name}")
+    saved_fields = "/".join(updates.keys())
+    print(f"[Store] Saved {saved_fields} for {name}")
     return updated
 
 
-def infer_and_store_gender_for_person(
+def infer_gender_for_person(
     store: PeopleStore,
     person: dict[str, Any],
     model: str,
@@ -167,9 +235,7 @@ def infer_and_store_gender_for_person(
 
     tier1_gender = infer_gender_tier1(canonical_name, model)
     if tier1_gender is not None:
-        updated = store.update_person(canonical_name, {"gender": tier1_gender})
-        print(f"[Store] Saved gender for {canonical_name}: {tier1_gender}")
-        return updated["name"], tier1_gender, False
+        return canonical_name, tier1_gender, False
 
     person_with_homepage = _ensure_homepage(person, store)
     homepage = person_with_homepage.get("homepage")
@@ -177,9 +243,28 @@ def infer_and_store_gender_for_person(
         raise ValueError(f"Could not obtain homepage for person: {canonical_name}")
 
     tier2_gender = infer_gender_from_homepage(canonical_name, homepage, model)
-    updated = store.update_person(canonical_name, {"gender": tier2_gender})
-    print(f"[Store] Saved gender for {canonical_name}: {tier2_gender}")
-    return updated["name"], tier2_gender, True
+    return str(person_with_homepage["name"]), tier2_gender, True
+
+
+def infer_and_store_gender_for_person(
+    store: PeopleStore,
+    person: dict[str, Any],
+    model: str,
+) -> tuple[str, str, bool]:
+    name, gender, used_tier2 = infer_gender_for_person(store, person, model)
+    updated = store.update_person(name, {"gender": gender})
+    print(f"[Store] Saved gender for {updated['name']}: {gender}")
+    return updated["name"], gender, used_tier2
+
+
+def _flush_gender_updates(store: PeopleStore, pending_updates: list[dict[str, str]]) -> int:
+    if not pending_updates:
+        return 0
+
+    _, updated_count = store.update_many(pending_updates)
+    print(f"[Store] Checkpointed {updated_count} gender updates")
+    pending_updates.clear()
+    return updated_count
 
 
 def infer_and_store_gender(
@@ -207,14 +292,68 @@ def process_people_batch(store: PeopleStore, model: str, first_n: int, process_a
 
     processed_count = 0
     skipped_count = 0
+    pending_gender_updates: list[dict[str, str]] = []
+    
+    # Separate people into those needing processing and those to skip
+    people_to_process: list[dict[str, Any]] = []
     for person in selected:
         person_name = str(person.get("name", "<unknown>"))
-        print(f"[Batch] Processing person: {person_name}")
-        _, _, _, skipped = infer_and_store_gender(store, person_name, model)
-        if skipped:
+        existing_gender = person.get("gender")
+        if isinstance(existing_gender, str) and existing_gender.strip() in {"male", "female"}:
+            print(f"[Skip] Gender already set for {person_name}: {existing_gender.strip()}")
             skipped_count += 1
-        else:
-            processed_count += 1
+            continue
+        people_to_process.append(person)
+    
+    # Process in batches of up to 50 for tier1
+    batch_size = 50
+    for batch_start in range(0, len(people_to_process), batch_size):
+        batch_end = min(batch_start + batch_size, len(people_to_process))
+        batch = people_to_process[batch_start:batch_end]
+        batch_names = [str(p.get("name", "<unknown>")) for p in batch]
+        
+        print(f"[Batch] Processing names {batch_start + 1} to {batch_end} (batch size: {len(batch_names)})")
+        
+        # Run tier1 batch query
+        tier1_results = infer_gender_tier1_batch(batch_names, model)
+        
+        # Collect tier2-needed people and update tier1-resolved people
+        tier2_people: list[tuple[dict[str, Any], str]] = []  # (person, name)
+        for person in batch:
+            person_name = str(person.get("name", "<unknown>"))
+            gender = tier1_results.get(person_name)
+            
+            if gender is not None:
+                # Tier1 resolved the gender
+                pending_gender_updates.append({"name": person_name, "gender": gender})
+                processed_count += 1
+            else:
+                # Need tier2 (homepage-based)
+                tier2_people.append((person, person_name))
+        
+        # Process tier2 for this batch's unclear results
+        for person, person_name in tier2_people:
+            try:
+                person_with_homepage = _ensure_homepage(person, store)
+                homepage = person_with_homepage.get("homepage")
+                if not isinstance(homepage, str) or not homepage.strip():
+                    print(f"[Skip] Could not obtain homepage for person: {person_name}")
+                    skipped_count += 1
+                    continue
+
+                tier2_gender = infer_gender_from_homepage(person_name, homepage, model)
+                pending_gender_updates.append({"name": person_name, "gender": tier2_gender})
+                processed_count += 1
+            except Exception as exc:
+                print(f"[Skip] Tier2 failed for {person_name}: {exc}")
+                skipped_count += 1
+        
+        # Checkpoint after processing this batch
+        if len(pending_gender_updates) >= GENDER_SAVE_INTERVAL:
+            _flush_gender_updates(store, pending_gender_updates)
+    
+    # Final checkpoint
+    _flush_gender_updates(store, pending_gender_updates)
 
     print(f"[Batch] Completed. Updated: {processed_count}, skipped: {skipped_count}")
     return 0
@@ -245,7 +384,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception as exc:  # noqa: BLE001
-        raise SystemExit(f"Error: {exc}") from exc
+    raise SystemExit(main())
