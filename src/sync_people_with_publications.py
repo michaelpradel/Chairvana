@@ -23,6 +23,54 @@ def _format_summary(person_name: str, summary: dict[str, Any]) -> str:
     return f"{person_name}: {summary['total']} papers ({by_venue}), years {year_range}"
 
 
+def sync_single_person_publications(
+    person_name: str,
+    *,
+    base_commit: str | None = None,
+    current_year: int | None = None,
+    max_years_back: int = 5,
+) -> tuple[bool, dict[str, Any] | None]:
+    """Recompute and store publication_summary for one existing person.
+
+    Returns:
+        Tuple of (changed, summary).
+        - changed=True when the stored publication summary was updated.
+        - summary=None when no target-venue publications were found.
+    """
+    normalized_name = person_name.strip()
+    if not normalized_name:
+        raise ValueError("person_name must be non-empty")
+
+    if current_year is None:
+        current_year = datetime.now().year
+
+    store = PeopleStore()
+    people = store.load(commit=base_commit)
+    if normalized_name not in people:
+        raise ValueError(f"No person found with name: {normalized_name}")
+
+    engine = DblpQueryEngine(preload_index=True)
+    summary = create_publication_summary(
+        normalized_name,
+        current_year=current_year,
+        max_years_back=max_years_back,
+        engine=engine,
+    )
+
+    existing_summary = people[normalized_name].get("publication_summary")
+    if summary == existing_summary:
+        return False, summary
+
+    if summary:
+        store.update(
+            normalized_name,
+            {"publication_summary": summary},
+            base_commit=base_commit,
+        )
+
+    return bool(summary), summary
+
+
 def sync_people_with_publications(
     current_year: int | None = None,
     max_years_back: int = 5,

@@ -846,6 +846,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Scanned target publication tags: {total}")
         print(f"Kept filtered publications: {kept}")
         print(f"Wrote filtered JSONL: {filtered_jsonl_path}")
+        print(
+            "Reminder: DBLP data changed. Recompute the expertise-gap index with "
+            "`python src/expertise_gap_finder.py --recompute-paper-embeddings --recompute-similarity-index`."
+        )
         return 0
 
     if args.prolific:

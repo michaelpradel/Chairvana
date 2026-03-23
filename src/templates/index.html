@@ -67,8 +67,16 @@
       {% endwith %}
 
       <section class="content">
+        <div class="left-column">
         <aside class="panel list-panel">
-          <h2>Search People</h2>
+          <div class="panel-header-row">
+            <h2>Search People</h2>
+            <a
+              href="{{ url_for('index', q=query, history=history_commit, add_person=1, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
+              class="panel-action-btn"
+              title="Create a new person entry"
+            >Add person</a>
+          </div>
           <p class="search-meta">{{ matched_people_count }} matching people</p>
           <form method="get" action="{{ url_for('index') }}" class="search" id="peopleSearchForm">
             {% if history_commit %}
@@ -116,29 +124,28 @@
           <ul class="person-list">
             {% for person in people %}
             <li>
-              <div class="person-item-wrapper">
-                <a
-                  href="{{ url_for('index', q=query, selected=person['name'], history=history_commit, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
-                  class="person-link {% if selected_person and selected_person['name'] == person['name'] %}active{% endif %}"
-                  {% if person.get('_topic_font_alpha') %}
-                  style="color: rgba(31, 31, 25, {{ person.get('_topic_font_alpha') }});"
-                  title="Topic similarity: {{ person.get('_topic_similarity', 0.0) }}"
+              <a
+                href="{{ url_for('index', q=query, selected=person['name'], history=history_commit, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
+                class="person-link {% if selected_person and selected_person['name'] == person['name'] %}active{% endif %}"
+                {% if person.get('_topic_font_alpha') %}
+                style="color: rgba(31, 31, 25, {{ person.get('_topic_font_alpha') }});"
+                {% endif %}
+                {% if person.get('_topic_tooltip') %}
+                title="{{ person.get('_topic_tooltip') }}"
+                {% endif %}
+              >
+                <strong>{{ person['name'] }}</strong>
+                <span>{{ person.get('affiliation') or 'Unknown affiliation' }}</span>
+                <span class="person-meta-inline">
+                  {{ person.get('gender', 'unknown') }}
+                  {% if person.get('country') %}
+                  · {{ person.get('country') }}
                   {% endif %}
-                >
-                  <strong>{{ person['name'] }}</strong>
-                  <span>{{ person.get('affiliation') or 'Unknown affiliation' }}</span>
-                  <span class="person-meta-inline">
-                    {{ person.get('gender', 'unknown') }}
-                    {% if person.get('country') %}
-                    · {{ person.get('country') }}
-                    {% endif %}
-                    {% if person.get('_topic_similarity') is not none %}
-                    · sim {{ '%.3f'|format(person.get('_topic_similarity', 0.0)) }}
-                    {% endif %}
-                  </span>
-                </a>
-                <button type="button" class="show-expertise-btn" data-person-name="{{ person['name'] }}" title="Add to expertise chart">Show expertise</button>
-              </div>
+                  {% if person.get('_topic_similarity') is not none %}
+                  · sim {{ '%.3f'|format(person.get('_topic_similarity', 0.0)) }}
+                  {% endif %}
+                </span>
+              </a>
             </li>
             {% endfor %}
             {% if not people %}
@@ -147,10 +154,48 @@
           </ul>
         </aside>
 
+        <section class="panel expertise-panel" aria-label="Expertise map">
+          <h2>Expertise</h2>
+          <form method="get" action="{{ url_for('index') }}" class="search chart-filter" id="expertiseForm">
+            {% if history_commit %}
+            <input type="hidden" name="history" value="{{ history_commit }}" />
+            {% endif %}
+            <input type="hidden" name="q" value="{{ query }}" />
+            <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
+            {% if selected_person %}
+            <input type="hidden" name="selected" value="{{ selected_person['name'] }}" />
+            {% endif %}
+
+            <label for="expertise_tags">Base tags</label>
+            <input id="expertise_tags" name="expertise_tags" value="{{ expertise_tags }}" placeholder="#invited" />
+
+            <label for="expertise_add_topic">Add topic</label>
+            <input id="expertise_add_topic" name="expertise_add_topic" value="" placeholder="e.g., t:testing" />
+            <p class="field-note">Use search syntax like <code>t:quantum</code> or <code>t:"compiler testing"</code></p>
+
+            <div id="expertise_added_items" class="expertise-added-items"></div>
+
+            <button type="submit" id="expertiseUpdateBtn">Update expertise map</button>
+            <button type="button" id="expertiseClearBtn" class="secondary">Clear added items</button>
+          </form>
+
+          <p class="distribution-meta" id="expertiseMeta">Loading expertise projection...</p>
+          <p class="chart-hint">Points that are closer have more similar expertise embeddings.</p>
+          <div class="expertise-chart-container">
+            <canvas id="expertiseChart"></canvas>
+          </div>
+          <p class="empty" id="expertiseFallback" hidden>No expertise points are available for this selection.</p>
+        </section>
+        </div>
+
         <div class="right-column">
           <section class="panel edit-panel">
-            {% if selected_person %}
+            {% if selected_person or add_person_mode %}
+            {% set editor_person = selected_person if selected_person else {} %}
             <h2>Edit Person</h2>
+            {% if add_person_mode %}
+            <div class="history-notice">Creating a new person entry. Name must be unique.</div>
+            {% endif %}
             {% if not history_is_head and history_entry %}
             <div class="history-notice">
               Viewing snapshot {{ history_entry.short_commit }}. Saving from this view will discard newer `people.jsonl` commits and replace them with a new commit.
@@ -162,8 +207,10 @@
               Cleaning affiliation data&hellip; other edits are disabled.
             </div>
             {% endif %}
-            <form method="post" action="{{ url_for('update_person') }}" class="editor{{ ' is-locked' if clean_running else '' }}">
+            <form method="post" action="{{ url_for('create_person') if add_person_mode else url_for('update_person') }}" class="editor{{ ' is-locked' if clean_running else '' }}">
+              {% if not add_person_mode %}
               <input type="hidden" name="original_name" value="{{ selected_person['name'] }}" />
+              {% endif %}
               <input type="hidden" name="q" value="{{ query }}" />
               <input type="hidden" name="history" value="{{ history_commit or '' }}" />
               <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
@@ -171,25 +218,25 @@
               <input type="hidden" name="expertise_add" value="{{ expertise_add }}" />
 
               <label for="name">Name</label>
-              <input id="name" name="name" value="{{ selected_person['name'] }}" required />
+              <input id="name" name="name" value="{{ editor_person.get('name', '') }}" required />
 
               <label for="affiliation">Affiliation</label>
               <input
                 id="affiliation"
                 name="affiliation"
-                value="{{ selected_person.get('affiliation', '') }}"
+                value="{{ editor_person.get('affiliation', '') }}"
               />
 
               <label for="homepage">Homepage</label>
               <input
                 id="homepage"
                 name="homepage"
-                value="{{ selected_person.get('homepage', '') }}"
+                value="{{ editor_person.get('homepage', '') }}"
                 placeholder="https://example.edu/~person"
               />
-              {% if selected_person.get('homepage') %}
+              {% if editor_person.get('homepage') %}
               <div class="field-note">
-                Current: <a href="{{ selected_person.get('homepage') }}" target="_blank" rel="noopener noreferrer">{{ selected_person.get('homepage') }}</a>
+                Current: <a href="{{ editor_person.get('homepage') }}" target="_blank" rel="noopener noreferrer">{{ editor_person.get('homepage') }}</a>
               </div>
               {% endif %}
 
@@ -197,7 +244,7 @@
               <input
                 id="gender"
                 name="gender"
-                value="{{ selected_person.get('gender', '') }}"
+                value="{{ editor_person.get('gender', '') }}"
                 placeholder="female, male, unknown"
               />
 
@@ -205,15 +252,20 @@
               <input
                 id="country"
                 name="country"
-                value="{{ selected_person.get('country', '') }}"
+                value="{{ editor_person.get('country', '') }}"
                 placeholder="USA, DEU, SGP"
+                maxlength="3"
+                minlength="3"
+                pattern="[A-Za-z]{3}"
+                title="Use a 3-letter country code like DEU"
+                oninput="this.value = this.value.toUpperCase()"
               />
 
               <label for="flags">Flags (space or comma separated)</label>
               <input
                 id="flags"
                 name="flags"
-                value="{{ selected_person.get('flags', []) | join(' ') }}"
+                value="{{ editor_person.get('flags', []) | join(' ') }}"
                 placeholder="#invite #redflag"
               />
               {% if top_common_tags %}
@@ -227,11 +279,12 @@
               </div>
               {% endif %}
 
+              {% if not add_person_mode %}
               <dl class="details">
                 <dt>PC memberships</dt>
                 <dd>
-                  {% if selected_person.get('pc_memberships') %}
-                  {% for m in selected_person.get('pc_memberships', []) %}
+                  {% if editor_person.get('pc_memberships') %}
+                  {% for m in editor_person.get('pc_memberships', []) %}
                   <span class="tag">{{ m.get('conference', '?') }} {{ m.get('year', '?') }}</span>
                   {% endfor %}
                   {% else %}
@@ -240,7 +293,7 @@
                 </dd>
                 <dt>Publications</dt>
                 <dd>
-                  {% set pub_summary = selected_person.get('publication_summary') %}
+                  {% set pub_summary = editor_person.get('publication_summary') %}
                   {% if publication_display_counts %}
                   {% for venue_label, count in publication_display_counts %}
                   <span class="tag">{{ venue_label }}: {{ count }}</span>
@@ -251,10 +304,17 @@
                   {% endif %}
                 </dd>
               </dl>
+              {% endif %}
 
               <div class="form-actions">
-                <button type="submit" class="primary"{% if clean_running %} disabled{% endif %}>Save changes</button>
+                {% if not add_person_mode %}
+                <button type="button" class="show-expertise-btn secondary" data-person-name="{{ selected_person['name'] }}" title="Add {{ selected_person['name'] }} to the expertise chart">Show expertise</button>
+                <button type="submit" formaction="{{ url_for('sync_person_publications') }}" class="secondary"{% if clean_running %} disabled{% endif %} title="Auto-complete publication summary from DBLP for {{ selected_person['name'] }}">Auto-complete publications</button>
+                {% endif %}
+                <button type="submit" class="primary"{% if clean_running %} disabled{% endif %}>{{ 'Add person' if add_person_mode else 'Save changes' }}</button>
+                {% if not add_person_mode %}
                 <button type="submit" formaction="{{ url_for('delete_person') }}" class="danger"{% if clean_running %} disabled{% endif %} onclick="return confirm('Are you sure you want to delete {{ selected_person['name'] | escape }}? This cannot be undone.');">Delete person</button>
+                {% endif %}
               </div>
             </form>
             {% else %}
@@ -275,7 +335,7 @@
               <input type="hidden" name="expertise_tags" value="{{ expertise_tags }}" />
               <input type="hidden" name="expertise_add" value="{{ expertise_add }}" />
               <label for="dist_tags">Distribution tags</label>
-              <input id="dist_tags" name="dist_tags" value="{{ distribution.input }}" placeholder="#invited #areachair" />
+              <input id="dist_tags" name="dist_tags" value="{{ distribution.input }}" placeholder="#invite #areachair" />
               <button type="submit">Update charts</button>
             </form>
 
@@ -384,37 +444,33 @@
             </section>
           </section>
 
-          <section class="panel expertise-panel" aria-label="Expertise map">
-            <h2>Expertise</h2>
-            <form method="get" action="{{ url_for('index') }}" class="search chart-filter" id="expertiseForm">
+          <section class="panel gap-panel" aria-label="Expertise gap finder">
+            <h2>Expertise Gap Finder</h2>
+            <form id="gapFinderForm" class="search chart-filter">
               {% if history_commit %}
-              <input type="hidden" name="history" value="{{ history_commit }}" />
-              {% endif %}
-              <input type="hidden" name="q" value="{{ query }}" />
-              <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
-              {% if selected_person %}
-              <input type="hidden" name="selected" value="{{ selected_person['name'] }}" />
+              <input type="hidden" id="gap_history" value="{{ history_commit }}" />
               {% endif %}
 
-              <label for="expertise_tags">Base tags</label>
-              <input id="expertise_tags" name="expertise_tags" value="{{ expertise_tags }}" placeholder="#invited" />
+              <label for="gap_tag">Target tag</label>
+              <input id="gap_tag" name="gap_tag" value="{{ gap_tag }}" placeholder="#invite" />
 
-              <label for="expertise_add_topic">Add topic</label>
-              <input id="expertise_add_topic" name="expertise_add_topic" value="" placeholder="e.g., t:testing" />
-              <p class="field-note">Use search syntax like <code>t:quantum</code> or <code>t:"compiler testing"</code></p>
+              <label for="gap_year_start">Year range</label>
+              <div class="gap-year-row">
+                <input id="gap_year_start" name="gap_year_start" value="{{ gap_year_start }}" placeholder="2024" inputmode="numeric" />
+                <span class="gap-year-sep">to</span>
+                <input id="gap_year_end" name="gap_year_end" value="{{ gap_year_end }}" placeholder="2026" inputmode="numeric" />
+              </div>
 
-              <div id="expertise_added_items" class="expertise-added-items"></div>
+              <label for="gap_min_similarity">Coverage similarity threshold</label>
+              <input id="gap_min_similarity" name="gap_min_similarity" value="{{ gap_min_similarity }}" placeholder="0.7" />
 
-              <button type="submit" id="expertiseUpdateBtn">Update expertise map</button>
-              <button type="button" id="expertiseClearBtn" class="secondary">Clear added items</button>
+              <button type="submit">Find coverage gaps</button>
             </form>
 
-            <p class="distribution-meta" id="expertiseMeta">Loading expertise projection...</p>
-            <p class="chart-hint">Points that are closer have more similar expertise embeddings.</p>
-            <div class="expertise-chart-container">
-              <canvas id="expertiseChart"></canvas>
-            </div>
-            <p class="empty" id="expertiseFallback" hidden>No expertise points are available for this selection.</p>
+            <p class="distribution-meta" id="gapMeta">Loading expertise gaps...</p>
+            <p class="chart-hint">Papers listed here have no tagged person with similarity above the threshold. Each row shows the top-5 closest tagged people.</p>
+
+            <div id="gapResults" class="gap-results"></div>
           </section>
         </div>
       </section>
@@ -624,6 +680,22 @@
       });
     }
 
+    function addExpertisePerson(personName) {
+      var normalizedName = String(personName || '').trim();
+      if (!normalizedName) {
+        return;
+      }
+
+      if (!addedPeople.includes(normalizedName)) {
+        addedPeople.push(normalizedName);
+      }
+
+      renderAddedItems();
+      reloadChart();
+    }
+
+    window.addExpertisePerson = addExpertisePerson;
+
     function reloadChart() {
       if (!chartEl || !metaEl) return;
       
@@ -789,63 +861,118 @@
   }());
 
   (function () {
-    // Handle "Show expertise" buttons in the Search People panel
+    var formEl = document.getElementById('gapFinderForm');
+    var resultsEl = document.getElementById('gapResults');
+    var metaEl = document.getElementById('gapMeta');
+    var historyEl = document.getElementById('gap_history');
+    var tagEl = document.getElementById('gap_tag');
+    var startEl = document.getElementById('gap_year_start');
+    var endEl = document.getElementById('gap_year_end');
+    var thresholdEl = document.getElementById('gap_min_similarity');
+
+    if (!formEl || !resultsEl || !metaEl || !tagEl || !startEl || !endEl || !thresholdEl) {
+      return;
+    }
+
+    function esc(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function renderRows(gaps) {
+      if (!Array.isArray(gaps) || !gaps.length) {
+        resultsEl.innerHTML = '<p class="empty">No uncovered papers for the current threshold.</p>';
+        return;
+      }
+
+      var rows = gaps.map(function (gap) {
+        var closest = Array.isArray(gap.closest_people) ? gap.closest_people : [];
+        var closestText = closest.length
+          ? closest.map(function (person) {
+              var similarity = typeof person.similarity === 'number' ? person.similarity.toFixed(4) : 'n/a';
+              var affiliation = person.affiliation ? ' (' + esc(person.affiliation) + ')' : '';
+              return '<li><strong>' + esc(person.name) + '</strong> · sim ' + similarity + affiliation + '</li>';
+            }).join('')
+          : '<li>No tagged people with usable embeddings.</li>';
+
+        var best = typeof gap.best_similarity === 'number' ? gap.best_similarity.toFixed(4) : 'n/a';
+        var year = gap.year || '?';
+        return '' +
+          '<tr>' +
+            '<td class="gap-paper-cell">' +
+              '<div class="gap-paper-title">' + esc(gap.title || 'Untitled') + '</div>' +
+              '<div class="gap-paper-meta">' + esc(gap.venue || 'Unknown venue') + ' · ' + esc(year) + '</div>' +
+            '</td>' +
+            '<td class="gap-score-cell">' + best + '</td>' +
+            '<td><ul class="gap-closest-list">' + closestText + '</ul></td>' +
+          '</tr>';
+      }).join('');
+
+      resultsEl.innerHTML = '' +
+        '<div class="gap-table-wrap">' +
+          '<table class="gap-table">' +
+            '<thead><tr><th>Paper</th><th>Best similarity</th><th>Top-5 closest tagged people</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+          '</table>' +
+        '</div>';
+    }
+
+    function loadGaps() {
+      var params = new URLSearchParams();
+      if (historyEl && historyEl.value) {
+        params.set('history', historyEl.value);
+      }
+      params.set('tag', tagEl.value || '#invite');
+      params.set('min_year', startEl.value || '2024');
+      params.set('max_year', endEl.value || '2026');
+      params.set('min_similarity', thresholdEl.value || '0.30');
+
+      metaEl.textContent = 'Loading expertise gaps...';
+      resultsEl.innerHTML = '';
+
+      fetch('/api/expertise-gaps?' + params.toString())
+        .then(function (response) {
+          return response.json().then(function (payload) {
+            if (!response.ok) {
+              var message = (payload && payload.error) ? payload.error : 'Failed to load expertise gaps';
+              throw new Error(message);
+            }
+            return payload;
+          });
+        })
+        .then(function (payload) {
+          metaEl.textContent =
+            (payload.gap_count || 0) + ' uncovered papers out of ' +
+            (payload.papers_in_range || 0) + ' target papers for tag ' + (payload.tag || '') +
+            ' (' + (payload.tagged_people_with_embeddings || 0) + '/' + (payload.tagged_people_count || 0) + ' tagged people with embeddings).';
+          renderRows(payload.gaps || []);
+        })
+        .catch(function (err) {
+          metaEl.textContent = 'Could not load expertise gaps.';
+          resultsEl.innerHTML = '<p class="empty">' + esc(err.message || 'Unknown error') + '</p>';
+        });
+    }
+
+    formEl.addEventListener('submit', function (event) {
+      event.preventDefault();
+      loadGaps();
+    });
+
+    loadGaps();
+  }());
+
+  (function () {
+    // Handle the "Show expertise" button in the Edit Person panel.
     document.querySelectorAll('.show-expertise-btn').forEach(function (btn) {
       btn.addEventListener('click', function (e) {
         e.preventDefault();
         var personName = btn.getAttribute('data-person-name');
-        var addedItemsContainer = document.getElementById('expertise_added_items');
-        var topicInput = document.getElementById('expertise_add_topic');
-        
-        // Get the added items from the expertise panel
-        var addedPeople = [];
-        var addedTopics = [];
-        
-        if (addedItemsContainer) {
-          addedItemsContainer.querySelectorAll('.expertise-added-item').forEach(function (item) {
-            var removeBtn = item.querySelector('.expertise-added-item-remove');
-            if (removeBtn) {
-              var type = removeBtn.getAttribute('data-type');
-              var value = removeBtn.getAttribute('data-value');
-              if (type === 'person') {
-                addedPeople.push(value);
-              } else if (type === 'topic') {
-                addedTopics.push(value);
-              }
-            }
-          });
-        }
-        
-        // Add the clicked person
-        if (personName && !addedPeople.includes(personName)) {
-          addedPeople.push(personName);
-        }
-        
-        // Update the container and reload
-        if (addedItemsContainer) {
-          addedItemsContainer.innerHTML = '';
-          addedPeople.forEach(function (person) {
-            var item = document.createElement('div');
-            item.className = 'expertise-added-item';
-            item.innerHTML = '<span>👤 ' + person + '</span>' +
-              '<button type="button" class="expertise-added-item-remove" data-type="person" data-value="' + person + '">×</button>';
-            addedItemsContainer.appendChild(item);
-          });
-          addedTopics.forEach(function (topic) {
-            var item = document.createElement('div');
-            item.className = 'expertise-added-item';
-            item.innerHTML = '<span>🔍 ' + topic + '</span>' +
-              '<button type="button" class="expertise-added-item-remove" data-type="topic" data-value="' + topic + '">×</button>';
-            addedItemsContainer.appendChild(item);
-          });
-        }
-        
-        // Trigger a chart update
-        var updateBtn = document.getElementById('expertiseUpdateBtn');
-        if (updateBtn) {
-          setTimeout(function () {
-            updateBtn.click();
-          }, 100);
+        if (typeof window.addExpertisePerson === 'function') {
+          window.addExpertisePerson(personName);
         }
       });
     });

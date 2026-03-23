@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import random
 import threading
 from collections import Counter
 from datetime import datetime
@@ -13,8 +14,11 @@ from flask import Flask, flash, jsonify, redirect, render_template, request, url
 
 from clean_people import clean_single
 from add_expertise_embeddings import cosine_similarity, get_or_create_topic_embedding, normalize_topic_text
+from expertise_gap_finder import find_expertise_gaps
 from llm_queries import DEFAULT_RESPONSES_MODEL
 from people import PeopleStore
+from query_dblp import DblpQueryEngine, PACMPL_PREFIX, TARGET_VENUE_PREFIXES
+from sync_people_with_publications import sync_single_person_publications
 
 
 app = Flask(__name__)
@@ -55,6 +59,137 @@ _LOG_ENTRY_PATTERN = re.compile(
 
 TOPIC_MIN_SIMILARITY = 0.22
 TOPIC_STRONG_SIMILARITY = 0.42
+TOPIC_TOOLTIP_NEIGHBOR_COUNT = 3
+TOPIC_TOOLTIP_MAX_YEARS_BACK = 5
+
+_dblp_engine_lock = threading.Lock()
+_dblp_engine: DblpQueryEngine | None = None
+
+
+def _get_dblp_engine() -> DblpQueryEngine | None:
+    global _dblp_engine
+    if _dblp_engine is not None:
+        return _dblp_engine
+
+    with _dblp_engine_lock:
+        if _dblp_engine is not None:
+            return _dblp_engine
+        try:
+            _dblp_engine = DblpQueryEngine(preload_index=True)
+        except Exception:  # noqa: BLE001
+            return None
+    return _dblp_engine
+
+
+def _is_target_publication_key(key: str) -> bool:
+    normalized_key = key.strip().casefold()
+    if not normalized_key:
+        return False
+    return any(
+        normalized_key == prefix or normalized_key.startswith(f"{prefix}/")
+        for prefix in TARGET_VENUE_PREFIXES
+    )
+
+
+def _is_oopsla_pacmpl_key(key: str, issue: str | None) -> bool:
+    normalized_key = key.strip().casefold()
+    if not normalized_key.startswith(f"{PACMPL_PREFIX}/"):
+        return False
+    normalized_issue = (issue or "").strip().upper()
+    return normalized_issue.startswith("OOPSLA")
+
+
+def _nearest_topic_papers_for_person(
+    person_name: str,
+    topic_vectors: list[list[float]],
+    paper_embeddings_by_name: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not topic_vectors:
+        return []
+
+    engine = _get_dblp_engine()
+    if engine is None:
+        return []
+
+    try:
+        publications = engine.query_author(person_name)
+    except Exception:  # noqa: BLE001
+        return []
+
+    min_year = datetime.now().year - TOPIC_TOOLTIP_MAX_YEARS_BACK
+    scored_papers: list[dict[str, Any]] = []
+    seen_record_names: set[str] = set()
+
+    for publication in publications:
+        if not isinstance(publication.year, int) or publication.year < min_year:
+            continue
+        if not isinstance(publication.key, str) or not publication.key.strip():
+            continue
+
+        key = publication.key.strip()
+        if not (_is_target_publication_key(key) or _is_oopsla_pacmpl_key(key, publication.issue)):
+            continue
+
+        record_name = f"paper:{key}"
+        if record_name in seen_record_names:
+            continue
+        seen_record_names.add(record_name)
+
+        record = paper_embeddings_by_name.get(record_name)
+        if not isinstance(record, dict):
+            continue
+
+        paper_vector = _clean_embedding_vector(record.get("embedding"))
+        if paper_vector is None:
+            continue
+
+        similarities = [
+            similarity
+            for similarity in (cosine_similarity(paper_vector, topic_vector) for topic_vector in topic_vectors)
+            if similarity is not None
+        ]
+        if not similarities:
+            continue
+
+        average_similarity = sum(similarities) / len(similarities)
+
+        raw_title = record.get("title")
+        if not isinstance(raw_title, str) or not raw_title.strip():
+            raw_title = publication.title if isinstance(publication.title, str) and publication.title.strip() else "Untitled"
+
+        record_year = record.get("year")
+        year = record_year if isinstance(record_year, int) else publication.year
+
+        scored_papers.append(
+            {
+                "title": " ".join(raw_title.split()),
+                "year": year,
+                "similarity": round(average_similarity, 4),
+            }
+        )
+
+    scored_papers.sort(
+        key=lambda paper: (
+            -float(paper.get("similarity", 0.0)),
+            str(paper.get("title", "")).casefold(),
+        )
+    )
+    return scored_papers[:TOPIC_TOOLTIP_NEIGHBOR_COUNT]
+
+
+def _build_topic_tooltip(topic_similarity: float, nearest_papers: list[dict[str, Any]]) -> str:
+    lines = [f"Topic similarity: {topic_similarity:.3f}"]
+    if nearest_papers:
+        lines.append("Top matching papers:")
+        for index, paper in enumerate(nearest_papers, start=1):
+            title = str(paper.get("title", "Untitled")).strip() or "Untitled"
+            year = paper.get("year")
+            year_suffix = f" ({year})" if isinstance(year, int) else ""
+            similarity = float(paper.get("similarity", 0.0))
+            lines.append(f"{index}. {title}{year_suffix} [sim {similarity:.3f}]")
+    else:
+        lines.append("Top matching papers: unavailable")
+    return "\n".join(lines)
 
 
 def _normalize_tag_query(raw_tags: str) -> list[str]:
@@ -282,7 +417,7 @@ def _tagged_people_distribution(commit: str | None, tag_query: str) -> dict[str,
     }
 
 
-def _top_common_tags(people: list[dict[str, Any]], limit: int = 3) -> list[str]:
+def _top_common_tags(people: list[dict[str, Any]], limit: int = 5) -> list[str]:
     tag_counter: Counter[str] = Counter()
 
     for person in people:
@@ -603,12 +738,23 @@ def _check_numeric_condition(value: int, op: str, threshold: int) -> bool:
     return False
 
 
+def _normalize_country_code(raw_country: str) -> str:
+    normalized = raw_country.strip().upper()
+    if not normalized:
+        return ""
+    if not re.fullmatch(r"[A-Z]{3}", normalized):
+        raise ValueError("Country must be a 3-letter code like DEU.")
+    return normalized
+
+
 def _filtered_people(query: str, commit: str | None = None) -> tuple[list[dict[str, Any]], int]:
     people = store.list_people(commit=commit)
     total_count = len(people)
 
     if not query.strip():
-        return people, total_count
+        shuffled_people = list(people)
+        random.shuffle(shuffled_people)
+        return shuffled_people, total_count
 
     filters = _parse_search_query(query)
 
@@ -620,6 +766,7 @@ def _filtered_people(query: str, commit: str | None = None) -> tuple[list[dict[s
     topics = filters.get("topics") or []
     if topics:
         embeddings_by_name = store.load_expertise_embeddings(commit=commit)
+        paper_embeddings_by_name = store.load_paper_expertise_embeddings(commit=commit)
 
         topic_vectors: list[list[float]] = []
         for topic in topics:
@@ -690,6 +837,9 @@ def _filtered_people(query: str, commit: str | None = None) -> tuple[list[dict[s
                 enriched_person = dict(person)
                 enriched_person["_topic_similarity"] = round(average_score, 4)
                 enriched_person["_topic_font_alpha"] = round(font_alpha, 3)
+                nearest_papers = _nearest_topic_papers_for_person(name, topic_vectors, paper_embeddings_by_name)
+                enriched_person["_topic_paper_neighbors"] = nearest_papers
+                enriched_person["_topic_tooltip"] = _build_topic_tooltip(average_score, nearest_papers)
                 semantic_matches.append(enriched_person)
 
             semantic_matches.sort(
@@ -741,10 +891,15 @@ def _publication_display_counts(person: dict[str, Any] | None) -> list[tuple[str
 def index() -> str:
     query = request.args.get("q", "")
     selected_name = request.args.get("selected", "").strip()
+    add_person_mode = request.args.get("add_person", "").strip().casefold() in {"1", "true", "yes"}
     requested_history = request.args.get("history", "").strip()
-    dist_tags = request.args.get("dist_tags", "#invited").strip()
+    dist_tags = request.args.get("dist_tags", "#invite").strip()
     expertise_tags = request.args.get("expertise_tags", dist_tags).strip()
     expertise_add = request.args.get("expertise_add", "").strip()
+    gap_tag = request.args.get("gap_tag", "#invite").strip() or "#invite"
+    gap_year_start = request.args.get("gap_year_start", "2024").strip() or "2024"
+    gap_year_end = request.args.get("gap_year_end", "2026").strip() or "2026"
+    gap_min_similarity = request.args.get("gap_min_similarity", "0.7").strip() or "0.7"
 
     try:
         history_state = store.get_history_state(requested_history or None)
@@ -757,16 +912,17 @@ def index() -> str:
     people, total_people_count = _filtered_people(query, active_commit)
     matched_people_count = len(people)
     all_people = store.list_people(commit=active_commit)
+    top_common_tags = _top_common_tags(people) or _top_common_tags(all_people)
     distribution = _tagged_people_distribution(active_commit, dist_tags)
 
     selected_person: dict[str, Any] | None = None
-    if selected_name:
+    if selected_name and not add_person_mode:
         for person in people:
             if person.get("name") == selected_name:
                 selected_person = person
                 break
 
-    if selected_person is None and people:
+    if selected_person is None and people and not add_person_mode:
         selected_person = people[0]
 
     with _clean_lock:
@@ -775,8 +931,9 @@ def index() -> str:
     return render_template(
         "index.html",
         people=people,
-        top_common_tags=_top_common_tags(people),
+        top_common_tags=top_common_tags,
         selected_person=selected_person,
+        add_person_mode=add_person_mode,
         publication_display_counts=_publication_display_counts(selected_person),
         selected_name=selected_name,
         query=query,
@@ -791,7 +948,144 @@ def index() -> str:
         distribution=distribution,
         expertise_tags=expertise_tags,
         expertise_add=expertise_add,
+        gap_tag=gap_tag,
+        gap_year_start=gap_year_start,
+        gap_year_end=gap_year_end,
+        gap_min_similarity=gap_min_similarity,
         all_people_names=[person.get("name", "") for person in all_people if person.get("name")],
+    )
+
+
+@app.post("/person/create")
+def create_person() -> Any:
+    new_name = request.form.get("name", "").strip()
+    new_affiliation = request.form.get("affiliation", "").strip()
+    new_homepage = request.form.get("homepage", "").strip()
+    new_gender = request.form.get("gender", "").strip()
+    new_country = request.form.get("country", "").strip()
+    flags = request.form.get("flags", "").strip()
+    query = request.form.get("q", "")
+    history_commit = request.form.get("history", "").strip() or None
+    dist_tags = request.form.get("dist_tags", "#invite").strip()
+    expertise_tags = request.form.get("expertise_tags", dist_tags).strip()
+    expertise_add = request.form.get("expertise_add", "").strip()
+
+    try:
+        normalized_country = _normalize_country_code(new_country)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                add_person=1,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
+
+    if not new_name:
+        flash("Name is required for new people.", "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                add_person=1,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
+
+    with _clean_lock:
+        if _clean_status["running"]:
+            flash("Cannot create: affiliation cleaning is in progress.", "error")
+            return redirect(
+                url_for(
+                    "index",
+                    q=query,
+                    add_person=1,
+                    history=history_commit,
+                    dist_tags=dist_tags,
+                    expertise_tags=expertise_tags,
+                    expertise_add=expertise_add,
+                )
+            )
+
+    existing_people = store.list_people(commit=history_commit)
+    existing_names_casefold = {
+        name.casefold()
+        for person in existing_people
+        for name in [person.get("name")]
+        if isinstance(name, str) and name.strip()
+    }
+    if new_name.casefold() in existing_names_casefold:
+        flash(f"A person with name '{new_name}' already exists.", "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                add_person=1,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
+
+    try:
+        is_new, created = store.add_person(
+            {
+                "name": new_name,
+                "affiliation": new_affiliation,
+                "homepage": new_homepage,
+                "flags": flags,
+                "gender": new_gender.casefold() if new_gender else "",
+                "country": normalized_country,
+            },
+            base_commit=history_commit,
+        )
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                add_person=1,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
+
+    if not is_new:
+        flash(f"A person with name '{new_name}' already exists.", "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                add_person=1,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
+
+    flash("Person added successfully.", "success")
+    return redirect(
+        url_for(
+            "index",
+            q=query,
+            selected=created["name"],
+            dist_tags=dist_tags,
+            expertise_tags=expertise_tags,
+            expertise_add=expertise_add,
+        )
     )
 
 
@@ -957,6 +1251,46 @@ def expertise_projection() -> Any:
     )
 
 
+@app.get("/api/expertise-gaps")
+def expertise_gaps() -> Any:
+    requested_history = request.args.get("history", "").strip()
+    tag = request.args.get("tag", "#invite").strip() or "#invite"
+
+    try:
+        min_year = int(request.args.get("min_year", "2024"))
+        max_year = int(request.args.get("max_year", "2026"))
+        min_similarity = float(request.args.get("min_similarity", "0.7"))
+    except ValueError:
+        return jsonify({"error": "min_year, max_year, and min_similarity must be numeric"}), 400
+
+    if min_year > max_year:
+        return jsonify({"error": "min_year must be <= max_year"}), 400
+    if min_similarity < -1.0 or min_similarity > 1.0:
+        return jsonify({"error": "min_similarity must be between -1 and 1"}), 400
+
+    try:
+        history_state = store.get_history_state(requested_history or None)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    active_commit = None if history_state["is_head"] else history_state["current_commit"]
+
+    try:
+        result = find_expertise_gaps(
+            tag=tag,
+            min_year=min_year,
+            max_year=max_year,
+            min_similarity=min_similarity,
+            top_k=5,
+            max_results=300,
+            base_commit=active_commit,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"failed to compute expertise gaps: {exc}"}), 500
+
+    return jsonify(result)
+
+
 @app.post("/person/update")
 def update_person() -> Any:
     original_name = request.form.get("original_name", "").strip()
@@ -968,9 +1302,25 @@ def update_person() -> Any:
     flags = request.form.get("flags", "").strip()
     query = request.form.get("q", "")
     history_commit = request.form.get("history", "").strip() or None
-    dist_tags = request.form.get("dist_tags", "#invited").strip()
+    dist_tags = request.form.get("dist_tags", "#invite").strip()
     expertise_tags = request.form.get("expertise_tags", dist_tags).strip()
     expertise_add = request.form.get("expertise_add", "").strip()
+
+    try:
+        normalized_country = _normalize_country_code(new_country)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                selected=original_name,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
 
     if not original_name:
         flash("Missing original person name.", "error")
@@ -1007,7 +1357,7 @@ def update_person() -> Any:
             "homepage": new_homepage,
             "flags": flags,
             "gender": new_gender.casefold() if new_gender else "",
-            "country": new_country.upper() if new_country else "",
+            "country": normalized_country,
         }
         updated = store.update_person(
             original_name,
@@ -1046,7 +1396,7 @@ def clean_person() -> Any:
     original_name = request.form.get("original_name", "").strip()
     query = request.form.get("q", "")
     history_commit = request.form.get("history", "").strip() or None
-    dist_tags = request.form.get("dist_tags", "#invited").strip()
+    dist_tags = request.form.get("dist_tags", "#invite").strip()
     expertise_tags = request.form.get("expertise_tags", dist_tags).strip()
     expertise_add = request.form.get("expertise_add", "").strip()
 
@@ -1132,7 +1482,7 @@ def delete_person() -> Any:
     original_name = request.form.get("original_name", "").strip()
     query = request.form.get("q", "")
     history_commit = request.form.get("history", "").strip() or None
-    dist_tags = request.form.get("dist_tags", "#invited").strip()
+    dist_tags = request.form.get("dist_tags", "#invite").strip()
     expertise_tags = request.form.get("expertise_tags", dist_tags).strip()
     expertise_add = request.form.get("expertise_add", "").strip()
 
@@ -1188,6 +1538,94 @@ def delete_person() -> Any:
         url_for(
             "index",
             q=query,
+            dist_tags=dist_tags,
+            expertise_tags=expertise_tags,
+            expertise_add=expertise_add,
+        )
+    )
+
+
+@app.post("/person/sync-publications")
+def sync_person_publications() -> Any:
+    original_name = request.form.get("original_name", "").strip()
+    query = request.form.get("q", "")
+    history_commit = request.form.get("history", "").strip() or None
+    dist_tags = request.form.get("dist_tags", "#invite").strip()
+    expertise_tags = request.form.get("expertise_tags", dist_tags).strip()
+    expertise_add = request.form.get("expertise_add", "").strip()
+
+    if not original_name:
+        flash("No person selected.", "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
+
+    with _clean_lock:
+        if _clean_status["running"]:
+            flash("Cannot auto-complete publications: affiliation cleaning is in progress.", "error")
+            return redirect(
+                url_for(
+                    "index",
+                    q=query,
+                    selected=original_name,
+                    history=history_commit,
+                    dist_tags=dist_tags,
+                    expertise_tags=expertise_tags,
+                    expertise_add=expertise_add,
+                )
+            )
+
+    try:
+        changed, summary = sync_single_person_publications(
+            original_name,
+            base_commit=history_commit,
+        )
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                selected=original_name,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        flash(f"Failed to auto-complete publications: {exc}", "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                selected=original_name,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
+
+    if summary is None:
+        flash("No target-venue publications found for this person.", "error")
+    elif changed:
+        flash("Publication summary auto-completed successfully.", "success")
+    else:
+        flash("Publication summary already up to date.", "success")
+
+    return redirect(
+        url_for(
+            "index",
+            q=query,
+            selected=original_name,
             dist_tags=dist_tags,
             expertise_tags=expertise_tags,
             expertise_add=expertise_add,

@@ -18,6 +18,7 @@ DEFAULT_PEOPLE_REPO_DIRNAME = ".people_repo"
 DEFAULT_PEOPLE_REPO_PATH = Path(__file__).resolve().parent.parent / "data" / DEFAULT_PEOPLE_REPO_DIRNAME
 DEFAULT_PEOPLE_PATH = DEFAULT_PEOPLE_REPO_PATH / "people.jsonl"
 DEFAULT_EXPERTISE_EMBEDDINGS_PATH = DEFAULT_PEOPLE_REPO_PATH / "expertise_embeddings.jsonl"
+DEFAULT_PAPER_EXPERTISE_EMBEDDINGS_PATH = DEFAULT_PEOPLE_REPO_PATH / "paper_expertise_embeddings.jsonl"
 
 
 def _merge_values(existing: Any, new_value: Any) -> Any:
@@ -132,6 +133,7 @@ class PeopleStore:
         path: Path | None = None,
         repo_dir: Path | None = None,
         expertise_embeddings_path: Path | None = None,
+        paper_expertise_embeddings_path: Path | None = None,
     ) -> None:
         self.path = path or DEFAULT_PEOPLE_PATH
         if repo_dir is not None:
@@ -142,6 +144,9 @@ class PeopleStore:
             self.repo_dir = self.path.parent / DEFAULT_PEOPLE_REPO_DIRNAME
         self.expertise_embeddings_path = expertise_embeddings_path or (
             self.repo_dir / DEFAULT_EXPERTISE_EMBEDDINGS_PATH.name
+        )
+        self.paper_expertise_embeddings_path = paper_expertise_embeddings_path or (
+            self.repo_dir / DEFAULT_PAPER_EXPERTISE_EMBEDDINGS_PATH.name
         )
 
     def load(self, commit: str | None = None) -> dict[str, dict[str, Any]]:
@@ -170,6 +175,18 @@ class PeopleStore:
 
         normalized_commit = self.resolve_history_commit(commit)
         content = self._read_file_from_commit(normalized_commit, self._expertise_repo_path())
+        return self._load_expertise_from_lines(content.splitlines())
+
+    def load_paper_expertise_embeddings(self, commit: str | None = None) -> dict[str, dict[str, Any]]:
+        if commit is None:
+            if not self.paper_expertise_embeddings_path.exists():
+                return {}
+
+            with self.paper_expertise_embeddings_path.open("r", encoding="utf-8") as file_obj:
+                return self._load_expertise_from_lines(file_obj)
+
+        normalized_commit = self.resolve_history_commit(commit)
+        content = self._read_file_from_commit(normalized_commit, self._paper_expertise_repo_path())
         return self._load_expertise_from_lines(content.splitlines())
 
     def list_history(self) -> list[dict[str, str]]:
@@ -311,6 +328,38 @@ class PeopleStore:
         self._write_all_expertise(embeddings_by_name)
         return added, updated
 
+    def update_many_paper_expertise(
+        self,
+        entries: Iterable[dict[str, Any]],
+        *,
+        base_commit: str | None = None,
+    ) -> tuple[int, int]:
+        self._prepare_write_base(base_commit)
+        embeddings_by_name = self.load_paper_expertise_embeddings()
+        added = 0
+        updated = 0
+
+        for entry in entries:
+            name = entry.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(f"Each paper expertise entry must contain a non-empty 'name': {entry}")
+
+            normalized_name = name.strip()
+            normalized_entry = {"name": normalized_name, **entry}
+
+            if normalized_name in embeddings_by_name:
+                embeddings_by_name[normalized_name] = _merge_dict(
+                    embeddings_by_name[normalized_name],
+                    normalized_entry,
+                )
+                updated += 1
+            else:
+                embeddings_by_name[normalized_name] = normalized_entry
+                added += 1
+
+        self._write_all_paper_expertise(embeddings_by_name)
+        return added, updated
+
     def update(
         self,
         name: str,
@@ -385,6 +434,26 @@ class PeopleStore:
 
         self._write_all(people)
         return updated
+
+    def add_person(
+        self,
+        record: dict[str, Any],
+        *,
+        base_commit: str | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
+        self._prepare_write_base(base_commit)
+        people = self.load()
+
+        normalized_record = self._normalize_person_record(record)
+        new_name = normalized_record["name"]
+
+        existing_names_casefold = {name.casefold() for name in people}
+        if new_name.casefold() in existing_names_casefold:
+            return False, people.get(new_name, normalized_record)
+
+        people[new_name] = normalized_record
+        self._write_all(people)
+        return True, normalized_record
 
     def delete_person(
         self,
@@ -568,6 +637,9 @@ class PeopleStore:
     def _expertise_repo_path(self) -> str:
         return self.expertise_embeddings_path.relative_to(self.repo_dir).as_posix()
 
+    def _paper_expertise_repo_path(self) -> str:
+        return self.paper_expertise_embeddings_path.relative_to(self.repo_dir).as_posix()
+
     def _read_people_file_from_commit(self, commit: str) -> str:
         return self._read_file_from_commit(commit, self._people_repo_path())
 
@@ -619,6 +691,20 @@ class PeopleStore:
         self._commit_store_files(
             message=f"Update expertise_embeddings.jsonl ({len(sorted_names)} people)",
             repo_paths=[self._expertise_repo_path()],
+        )
+
+    def _write_all_paper_expertise(self, embeddings_by_name: dict[str, dict[str, Any]]) -> None:
+        self.paper_expertise_embeddings_path.parent.mkdir(parents=True, exist_ok=True)
+        sorted_names = sorted(embeddings_by_name, key=str.casefold)
+
+        with self.paper_expertise_embeddings_path.open("w", encoding="utf-8") as file_obj:
+            for name in sorted_names:
+                record = embeddings_by_name[name]
+                file_obj.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        self._commit_store_files(
+            message=f"Update paper_expertise_embeddings.jsonl ({len(sorted_names)} papers)",
+            repo_paths=[self._paper_expertise_repo_path()],
         )
 
     def _git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
