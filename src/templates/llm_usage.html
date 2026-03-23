@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chairvana - LLM Usage</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Chivo:wght@400;500;700&family=Fraunces:opsz,wght@9..144,600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+  </head>
+  <body>
+    <div class="backdrop"></div>
+    <main class="layout usage-layout">
+      <header class="topbar usage-topbar">
+        <div>
+          <h1>LLM Usage Stats</h1>
+          <p>Token usage and cost breakdown from local logs</p>
+        </div>
+        <div class="meta">
+          <a href="{{ url_for('index') }}" class="reload-btn">&larr; Back to People UI</a>
+        </div>
+      </header>
+
+      <section class="usage-grid">
+        <article class="panel usage-kpi">
+          <h2>Overview</h2>
+          <div class="usage-kpi-grid">
+            <div>
+              <div class="kpi-label">Model</div>
+              <div class="kpi-value small">{{ model }}</div>
+            </div>
+            <div>
+              <div class="kpi-label">Log Calls</div>
+              <div class="kpi-value">{{ stats.totals.calls }}</div>
+            </div>
+            <div>
+              <div class="kpi-label">Input Tokens</div>
+              <div class="kpi-value">{{ '{:,}'.format(stats.totals.input_tokens) }}</div>
+            </div>
+            <div>
+              <div class="kpi-label">Output Tokens</div>
+              <div class="kpi-value">{{ '{:,}'.format(stats.totals.output_tokens) }}</div>
+            </div>
+            <div>
+              <div class="kpi-label">Total Tokens</div>
+              <div class="kpi-value">{{ '{:,}'.format(stats.totals.total_tokens) }}</div>
+            </div>
+            <div>
+              <div class="kpi-label">Estimated Cost</div>
+              {% if stats.totals.cost_available %}
+              <div class="kpi-value">${{ '%.2f'|format(stats.totals.cost_usd) }}</div>
+              {% else %}
+              <div class="kpi-value small">Unavailable</div>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="pricing-note">
+            {% if stats.pricing.has_pricing %}
+            {% if stats.pricing.pricing_mode == 'exact' %}
+            Exact pricing applied for {{ stats.pricing.resolved_model }} at ${{ '%.3f'|format(stats.pricing.input_per_1m) }}/1M input and
+            ${{ '%.3f'|format(stats.pricing.output_per_1m) }}/1M output.
+            {% elif stats.pricing.pricing_mode == 'estimated' %}
+            Estimated pricing applied for {{ stats.pricing.requested_model }} using closest published tier {{ stats.pricing.resolved_model }}:
+            ${{ '%.3f'|format(stats.pricing.input_per_1m) }}/1M input and ${{ '%.3f'|format(stats.pricing.output_per_1m) }}/1M output.
+            {% else %}
+            Pricing entry unresolved for {{ model }}.
+            {% endif %}
+            {% else %}
+            No pricing table entry found for {{ model }}.
+            {% endif %}
+            <br />
+            Source: <a href="{{ stats.pricing.pricing_source }}" target="_blank" rel="noopener noreferrer">OpenAI pricing</a>
+          </div>
+        </article>
+
+        <article class="panel usage-chart-panel">
+          <h2>Tokens Over Time</h2>
+          {% if stats.timeline.labels %}
+          <div class="usage-chart-wrap">
+            <canvas id="tokensTimelineChart"></canvas>
+          </div>
+          {% else %}
+          <p class="empty">No log records found in the logs folder.</p>
+          {% endif %}
+        </article>
+
+        <article class="panel usage-chart-panel">
+          <h2>Cumulative Cost Over Time</h2>
+          {% if stats.timeline.labels and stats.totals.cost_available %}
+          <div class="usage-chart-wrap">
+            <canvas id="costTimelineChart"></canvas>
+          </div>
+          {% elif stats.timeline.labels %}
+          <p class="empty">Cost chart unavailable because model pricing was not resolved.</p>
+          {% else %}
+          <p class="empty">No log records found in the logs folder.</p>
+          {% endif %}
+        </article>
+
+        <article class="panel usage-chart-panel usage-description-chart-panel">
+          <h2>Tokens by Query Description</h2>
+          {% if stats.grouped_by_description %}
+          <div class="usage-chart-wrap">
+            <canvas id="descriptionChart"></canvas>
+          </div>
+          {% else %}
+          <p class="empty">No grouped usage data yet.</p>
+          {% endif %}
+        </article>
+      </section>
+
+      <section class="panel usage-table-panel">
+        <h2>Usage by Query Description</h2>
+        {% if stats.grouped_by_description %}
+        <div class="usage-table-wrap">
+          <table class="usage-table">
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th>Calls</th>
+                <th>Input Tokens</th>
+                <th>Output Tokens</th>
+                <th>Total Tokens</th>
+                <th>Estimated Cost (USD)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in stats.grouped_by_description %}
+              <tr>
+                <td>{{ row.description }}</td>
+                <td>{{ row.calls }}</td>
+                <td>{{ '{:,}'.format(row.input_tokens) }}</td>
+                <td>{{ '{:,}'.format(row.output_tokens) }}</td>
+                <td>{{ '{:,}'.format(row.total_tokens) }}</td>
+                <td>
+                  {% if row.cost_available %}
+                  ${{ '%.2f'|format(row.cost_usd) }}
+                  {% else %}
+                  -
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="empty">No grouped usage data yet.</p>
+        {% endif %}
+      </section>
+    </main>
+
+    {% if stats.timeline.labels %}
+    <script>
+      (function() {
+        var labels = {{ stats.timeline.labels | tojson }};
+        var inputTokens = {{ stats.timeline.input_tokens | tojson }};
+        var outputTokens = {{ stats.timeline.output_tokens | tojson }};
+        var cumulativeCost = {{ stats.timeline.cost_cumulative_usd | tojson }};
+        var groupedRows = {{ stats.grouped_by_description | tojson }};
+
+        var tokenCtx = document.getElementById('tokensTimelineChart');
+        if (tokenCtx) {
+          new Chart(tokenCtx, {
+            type: 'line',
+            data: {
+              labels: labels,
+              datasets: [
+                {
+                  label: 'Input Tokens',
+                  data: inputTokens,
+                  borderColor: '#0e6a61',
+                  backgroundColor: 'rgba(14, 106, 97, 0.16)',
+                  tension: 0.25,
+                  fill: true,
+                  pointRadius: 2,
+                },
+                {
+                  label: 'Output Tokens',
+                  data: outputTokens,
+                  borderColor: '#a95f1e',
+                  backgroundColor: 'rgba(169, 95, 30, 0.16)',
+                  tension: 0.25,
+                  fill: true,
+                  pointRadius: 2,
+                }
+              ]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: { position: 'bottom' }
+              },
+              scales: {
+                x: {
+                  ticks: { maxRotation: 50, minRotation: 50, autoSkip: true, maxTicksLimit: 12 }
+                },
+                y: {
+                  beginAtZero: true,
+                  title: { display: true, text: 'Tokens per call' }
+                }
+              }
+            }
+          });
+        }
+
+        var costCtx = document.getElementById('costTimelineChart');
+        if (costCtx && cumulativeCost.length) {
+          new Chart(costCtx, {
+            type: 'line',
+            data: {
+              labels: labels,
+              datasets: [{
+                label: 'Cumulative Cost (USD)',
+                data: cumulativeCost,
+                borderColor: '#7f2242',
+                backgroundColor: 'rgba(127, 34, 66, 0.18)',
+                tension: 0.22,
+                fill: true,
+                pointRadius: 2,
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: { position: 'bottom' }
+              },
+              scales: {
+                x: {
+                  ticks: { maxRotation: 50, minRotation: 50, autoSkip: true, maxTicksLimit: 12 }
+                },
+                y: {
+                  beginAtZero: true,
+                  title: { display: true, text: 'USD' }
+                }
+              }
+            }
+          });
+        }
+
+        var descCtx = document.getElementById('descriptionChart');
+        if (descCtx && groupedRows.length) {
+          var topRows = groupedRows.slice(0, 12);
+          new Chart(descCtx, {
+            type: 'bar',
+            data: {
+              labels: topRows.map(function(row) { return row.description; }),
+              datasets: [
+                {
+                  label: 'Input Tokens',
+                  data: topRows.map(function(row) { return row.input_tokens; }),
+                  backgroundColor: 'rgba(14, 106, 97, 0.72)',
+                },
+                {
+                  label: 'Output Tokens',
+                  data: topRows.map(function(row) { return row.output_tokens; }),
+                  backgroundColor: 'rgba(169, 95, 30, 0.72)',
+                }
+              ]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: { position: 'bottom' }
+              },
+              scales: {
+                x: {
+                  stacked: true,
+                  ticks: { autoSkip: false, maxRotation: 55, minRotation: 55 }
+                },
+                y: {
+                  beginAtZero: true,
+                  stacked: true,
+                  title: { display: true, text: 'Tokens' }
+                }
+              }
+            }
+          });
+        }
+      })();
+    </script>
+    {% endif %}
+  </body>
+</html>

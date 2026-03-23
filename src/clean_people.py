@@ -92,6 +92,7 @@ def clean_record(person: dict[str, Any], model: str) -> dict[str, Any]:
     parsed = parse_structured_response(
         input_text=_cleaning_prompt(person),
         response_model=CleanAffiliationResult,
+        description="clean affiliation",
         model=model,
     )
 

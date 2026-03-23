@@ -135,6 +135,7 @@ def infer_gender_tier1(name: str, model: str) -> str | None:
     parsed = parse_structured_response(
         input_text=_tier1_prompt(name),
         response_model=Tier1NameGenderResult,
+        description="infer gender by name (tier 1)",
         model=model,
     )
     print(f"[LLM][Tier 1] Classification for {name}: {parsed.classification}")
@@ -166,6 +167,7 @@ def infer_gender_tier1_batch(names: list[str], model: str) -> dict[str, str | No
     parsed = parse_structured_response(
         input_text=_tier1_batch_prompt(names),
         response_model=Tier1BatchNameGenderResult,
+        description="infer gender batch by name (tier 1)",
         model=model,
     )
     
@@ -189,6 +191,7 @@ def infer_gender_from_homepage(name: str, homepage: str, model: str) -> str:
     parsed = parse_structured_response(
         input_text=_tier2_prompt(name, homepage),
         response_model=Tier2HomepageGenderResult,
+        description="infer gender from homepage (tier 2)",
         model=model,
         tools=[{"type": "web_search"}],
     )

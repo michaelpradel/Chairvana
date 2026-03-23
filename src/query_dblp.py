@@ -570,6 +570,7 @@ def _resolve_main_track_via_llm(
     response = parse_structured_response(
         input_text=input_text,
         response_model=MainTrackResponse,
+        description="identify main research track",
         client=get_openai_client(),
     )
 

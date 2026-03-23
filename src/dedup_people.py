@@ -184,6 +184,7 @@ def _detect_duplicate_groups(names: list[str], model: str) -> list[DuplicateGrou
     parsed = parse_structured_response(
         input_text=_duplicate_prompt(names),
         response_model=DuplicateDetectionResult,
+        description="detect duplicate names",
         model=model,
     )
     return parsed.groups
@@ -246,6 +247,7 @@ def _merge_pair(canonical_name: str, first: dict[str, Any], second: dict[str, An
             parsed = parse_structured_response(
                 input_text=prompt,
                 response_model=MergeDuplicateResult,
+                description="merge duplicate pair",
                 model=model,
             )
             merged = _parse_merged_person_json(parsed.merged_person_json, canonical_name)

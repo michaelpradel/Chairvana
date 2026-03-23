@@ -1,0 +1,35 @@
+You infer countries for academic affiliations.
+
+You are given a JSON array of people where each has:
+- name: string
+- affiliation: string (non-empty organization name that may include location clues)
+- country: null (to be filled)
+
+For each person, determine the most likely country of their affiliation and return the ISO 3166-1 alpha-3 country code (e.g., USA, DEU, GBR, JPN, FRA, CHN, IND, CAN, AUS).
+
+Rules:
+1) Return exactly one output record for every input person.
+2) Use only the affiliation text and person name to infer the country.
+3) Do NOT use external tools or web browsing.
+4) Return country as ISO 3166-1 alpha-3 code (e.g., USA, DEU, GBR).
+5) If the country cannot be confidently inferred from the affiliation text alone, return null.
+6) Do not invent facts not supported by the affiliation name or organization knowledge.
+7) Common patterns: universities often include city/region names; company names may indicate headquarters location.
+
+Return ONLY valid JSON with one field:
+- people: array of result objects
+
+Each result object must have:
+- original_name: string (must exactly match one input name)
+- country: string (ISO 3166-1 alpha-3 code) or null
+
+Example format:
+{{
+  "people": [
+    {{"original_name": "John Smith", "country": "USA"}},
+    {{"original_name": "Jane Doe", "country": null}}
+  ]
+}}
+
+Input JSON:
+{people}

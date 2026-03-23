@@ -1,10 +1,10 @@
-"""Auto-complete missing affiliation data in the people store.
+"""Auto-complete missing affiliation/country data in the people store.
 
-For people whose affiliation is missing, this script asks an LLM to:
-1. Find a likely homepage via web search.
-2. Infer current affiliation and country.
+Two-stage process:
+1. For people with affiliation but no country: infer country via LLM (no web search).
+2. For people missing affiliation: find homepage + infer affiliation/country via web search.
 
-To reduce name ambiguity, the prompt includes a few recent paper titles from DBLP.
+For stage 2, to reduce name ambiguity, the prompt includes a few recent paper titles from DBLP.
 All reads/writes of people records go through ``PeopleStore``.
 """
 
@@ -25,6 +25,9 @@ from query_dblp import DblpQueryEngine, get_target_publications_for_author
 
 
 AUTO_COMPLETE_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "auto_complete_affiliation.txt"
+INFER_COUNTRY_PROMPT_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "infer_country_from_affiliation_batch.txt"
+)
 COUNTRY_CODE_RE = re.compile(r"^[A-Z]{3}$")
 URL_ADAPTER = TypeAdapter(HttpUrl)
 
@@ -33,6 +36,17 @@ class AutoCompleteResult(BaseModel):
     homepage: str
     affiliation: str
     country: str | None = None
+
+
+class CountryInferenceResult(BaseModel):
+    """Result for one person's country inference."""
+    original_name: str
+    country: str | None = None
+
+
+class CountryInferenceBatchResult(BaseModel):
+    """Batch result with list of country assignments."""
+    people: list[CountryInferenceResult]
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -81,6 +95,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Compute updates but do not write them.",
     )
+    parser.add_argument(
+        "--skip-country-inference",
+        action="store_true",
+        help="Skip the country inference stage (only complete missing affiliations).",
+    )
     args = parser.parse_args(argv)
 
     if args.limit is not None and args.limit <= 0:
@@ -91,6 +110,164 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--max-paper-titles must be a positive integer")
 
     return args
+
+
+def _load_country_prompt_template() -> str:
+    """Load the country inference prompt template."""
+    try:
+        return INFER_COUNTRY_PROMPT_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Missing prompt template: {INFER_COUNTRY_PROMPT_PATH}") from exc
+
+
+def _is_valid_country_code(code: str | None) -> bool:
+    """Check if code is a valid ISO 3166-1 alpha-3 country code."""
+    if code is None:
+        return True
+    if not isinstance(code, str):
+        return False
+    return bool(COUNTRY_CODE_RE.match(code))
+
+
+def _needs_country_inference(person: dict[str, Any]) -> bool:
+    """Check if a person has affiliation but missing country."""
+    affiliation = person.get("affiliation")
+    country = person.get("country")
+    
+    # Must have non-empty affiliation
+    if not isinstance(affiliation, str) or not affiliation.strip():
+        return False
+    
+    # Must not have a country set
+    if country is not None:
+        return False
+    
+    return True
+
+
+def _batch_country_prompt(people_batch: list[dict[str, Any]]) -> str:
+    """Create a batch prompt for country inference."""
+    template = _load_country_prompt_template()
+    
+    # Build JSON array of people for the prompt
+    people_for_prompt = []
+    for person in people_batch:
+        name = person.get("name", "")
+        affiliation = person.get("affiliation", "")
+        people_for_prompt.append({
+            "name": name,
+            "affiliation": affiliation,
+            "country": None
+        })
+    
+    people_json = json.dumps(people_for_prompt, indent=2, ensure_ascii=False)
+    return template.format(people=people_json)
+
+
+def _infer_country_batch(people_batch: list[dict[str, Any]], model: str) -> dict[str, str | None]:
+    """Query country for a batch of people (max 50) in a single LLM request.
+    
+    Args:
+        people_batch: List of people records with affiliation but no country
+        model: OpenAI model to use
+        
+    Returns:
+        dict mapping person name to country code (ISO 3166-1 alpha-3) or None
+    """
+    if not people_batch:
+        return {}
+    
+    if len(people_batch) > 50:
+        raise ValueError(f"Batch size exceeds 50: {len(people_batch)}")
+    
+    batch_names = [p.get("name", "<unknown>") for p in people_batch]
+    print(f"[Country] Inferring country for {len(batch_names)} people")
+    
+    try:
+        parsed = parse_structured_response(
+            input_text=_batch_country_prompt(people_batch),
+            response_model=CountryInferenceBatchResult,
+            description="infer country from affiliation batch",
+            model=model,
+        )
+    except Exception as exc:
+        print(f"[Country][Warn] LLM request failed: {exc}")
+        return {}
+    
+    result = {}
+    for inference in parsed.people:
+        name = inference.original_name
+        country = inference.country
+        
+        # Validate country code if present
+        if not _is_valid_country_code(country):
+            print(f"[Country][Warn] Invalid country code for {name}: {country}, skipping")
+            country = None
+        
+        result[name] = country
+    
+    return result
+
+
+def _infer_and_save_countries(
+    store: PeopleStore,
+    model: str,
+    dry_run: bool,
+) -> int:
+    """Infer countries for people with affiliation but no country.
+    
+    Returns:
+        Number of people updated
+    """
+    people = store.load()
+    
+    # Filter to people needing country inference
+    people_needing_country: list[dict[str, Any]] = []
+    for person in sorted(people.values(), key=lambda p: str(p.get("name", "")).casefold()):
+        if _needs_country_inference(person):
+            people_needing_country.append(person)
+    
+    if not people_needing_country:
+        print("[Country] No people found with affiliation but missing country")
+        return 0
+    
+    print(f"[Country] Found {len(people_needing_country)} people with affiliation but no country")
+    
+    total_updated = 0
+    pending_updates: list[dict[str, Any]] = []
+    
+    # Process in batches of up to 50
+    batch_size = 50
+    for batch_start in range(0, len(people_needing_country), batch_size):
+        batch_end = min(batch_start + batch_size, len(people_needing_country))
+        batch = people_needing_country[batch_start:batch_end]
+        
+        print(f"[Country] Processing batch {batch_start // batch_size + 1} ({len(batch)} people)")
+        
+        # Run country inference
+        batch_results = _infer_country_batch(batch, model)
+        
+        # Collect updates
+        for person in batch:
+            person_name = str(person.get("name", "<unknown>"))
+            country = batch_results.get(person_name)
+            
+            if country is not None:
+                pending_updates.append({"name": person_name, "country": country})
+                total_updated += 1
+    
+    # Save all updates
+    if pending_updates:
+        if dry_run:
+            print(f"[Dry-run] Would update {len(pending_updates)} people with country info")
+            for update in pending_updates:
+                print(f"  {update['name']}: {update['country']}")
+        else:
+            _, updated_count = store.update_many(pending_updates)
+            print(f"[Country] Saved {updated_count} country updates")
+    
+    return total_updated
+
 
 
 def _load_prompt_template() -> str:
@@ -225,6 +402,7 @@ def _infer_affiliation_and_country(
         parsed = parse_structured_response(
             input_text=prompt,
             response_model=AutoCompleteResult,
+            description="auto-complete person info",
             model=model,
             tools=[{"type": "web_search"}],
         )
@@ -253,7 +431,7 @@ def _infer_affiliation_and_country(
     return updates
 
 
-def _iter_targets(
+def _iter_targets_for_affiliation(
     people: dict[str, dict[str, Any]],
     *,
     requested_name: str | None,
@@ -282,13 +460,25 @@ def auto_complete_affiliations(
     limit: int | None,
     years_back: int,
     max_paper_titles: int,
+    skip_country_inference: bool,
     dry_run: bool,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int]:
+    """Process country inference and affiliation completion.
+    
+    Returns:
+        (country_updated, affiliation_processed, affiliation_changed, affiliation_skipped)
+    """
+    # Stage 1: Infer countries for people with affiliation but no country
+    country_updated = 0
+    if not skip_country_inference:
+        country_updated = _infer_and_save_countries(store, model, dry_run)
+    
+    # Reload people after country inference stage
     people = store.load()
-    targets = _iter_targets(people, requested_name=requested_name, limit=limit)
+    targets = _iter_targets_for_affiliation(people, requested_name=requested_name, limit=limit)
 
     if not targets:
-        return 0, 0, 0
+        return country_updated, 0, 0, 0
 
     prompt_template = _load_prompt_template()
     engine = DblpQueryEngine(preload_index=True)
@@ -325,32 +515,34 @@ def auto_complete_affiliations(
     if dry_run:
         for update in pending_updates:
             print(json.dumps(update, ensure_ascii=False))
-        return len(targets), len(pending_updates), skipped
+        return country_updated, len(targets), len(pending_updates), skipped
 
     if not pending_updates:
-        return len(targets), 0, skipped
+        return country_updated, len(targets), 0, skipped
 
     added, updated = store.update_many(pending_updates)
-    return len(targets), added + updated, skipped
+    return country_updated, len(targets), added + updated, skipped
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     store = PeopleStore(path=args.people_file) if args.people_file is not None else PeopleStore()
 
-    processed, changed, skipped = auto_complete_affiliations(
+    country_updated, processed, changed, skipped = auto_complete_affiliations(
         store=store,
         model=args.model,
         requested_name=args.name,
         limit=args.limit,
         years_back=args.years_back,
         max_paper_titles=args.max_paper_titles,
+        skip_country_inference=args.skip_country_inference,
         dry_run=args.dry_run,
     )
 
+    print(f"Country inference: {country_updated} updated")
     print(
-        f"Processed {processed} people missing affiliation; "
-        f"produced {changed} updates; skipped {skipped}."
+        f"Affiliation completion: processed {processed}; "
+        f"changed {changed}; skipped {skipped}."
     )
     return 0
 

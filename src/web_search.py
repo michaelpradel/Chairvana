@@ -112,6 +112,7 @@ def search_best_web_result(query: str) -> SearchResult:
     result = parse_structured_response(
         input_text=load_prompt(query),
         response_model=SearchResult,
+        description="search best web result",
         model=MODEL,
         tools=[{"type": "web_search"}],
     )
@@ -131,6 +132,7 @@ def search_research_track_pc_page(conference: str, year: int) -> SearchResult:
     result = parse_structured_response(
         input_text=prompt,
         response_model=SearchResult,
+        description="search research track PC page",
         model=MODEL,
         tools=[{"type": "web_search"}],
     )
@@ -143,6 +145,7 @@ def find_homepage_and_email(person: str) -> HomepageAndEmailResult:
     result = parse_structured_response(
         input_text=load_homepage_email_prompt(person),
         response_model=HomepageAndEmailResult,
+        description="find homepage and email",
         model=MODEL,
         tools=[{"type": "web_search"}],
     )

@@ -26,7 +26,7 @@
           <div class="history-controls" aria-label="people history navigation">
             {% if older_history_commit and not clean_running %}
             <a
-              href="{{ url_for('index', q=query, selected=selected_name, history=older_history_commit, dist_tags=distribution.input) }}"
+              href="{{ url_for('index', q=query, selected=selected_name, history=older_history_commit, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
               class="history-btn"
               title="Show the previous committed version of people.jsonl"
             >&larr; Older</a>
@@ -44,7 +44,7 @@
 
             {% if newer_history_commit and not clean_running %}
             <a
-              href="{{ url_for('index', q=query, selected=selected_name, history=newer_history_commit, dist_tags=distribution.input) }}"
+              href="{{ url_for('index', q=query, selected=selected_name, history=newer_history_commit, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
               class="history-btn"
               title="Show the next committed version of people.jsonl"
             >Newer &rarr;</a>
@@ -52,7 +52,7 @@
             <span class="history-btn disabled">Newer &rarr;</span>
             {% endif %}
           </div>
-          <a href="{{ url_for('index', dist_tags=distribution.input) }}" class="reload-btn" title="Reload from store">&#8635; Reload</a>
+          <a href="{{ url_for('index', dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}" class="reload-btn" title="Reload from store">&#8635; Reload</a>
         </div>
       </header>
 
@@ -70,11 +70,13 @@
         <aside class="panel list-panel">
           <h2>Search People</h2>
           <p class="search-meta">{{ matched_people_count }} matching people</p>
-          <form method="get" action="{{ url_for('index') }}" class="search">
+          <form method="get" action="{{ url_for('index') }}" class="search" id="peopleSearchForm">
             {% if history_commit %}
             <input type="hidden" name="history" value="{{ history_commit }}" />
             {% endif %}
             <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
+            <input type="hidden" name="expertise_tags" value="{{ expertise_tags }}" />
+            <input type="hidden" name="expertise_add" value="{{ expertise_add }}" />
             <label for="q" title="Search by name, affiliation, country, flags, gender, or publication/PC membership count">
               Search <span class="help-icon">?</span>
             </label>
@@ -82,8 +84,8 @@
               id="q" 
               name="q" 
               value="{{ query }}" 
-              placeholder="e.g., CISPA male pubs>5 pcs>=3"
-              title="Supported filters: text (name/affiliation/country), 'male'/'female', 'pubs>N', 'pcs>N' (combine with spaces)"
+              placeholder="e.g., Germany t:testing pubs>5"
+              title="Supported filters: text, male/female, gender:unknown, country:USA, affiliation:unknown, pubs>N, pcs>N, t:topic"
             />
             <button type="submit">Filter</button>
             <div class="search-help">
@@ -91,15 +93,21 @@
                 <summary>Search syntax help</summary>
                 <dl>
                   <dt>Text search</dt>
-                  <dd>Matches name, affiliation, country, or flags. E.g., <code>CISPA</code>, <code>Singapore</code></dd>
+                  <dd>Matches name, affiliation, country, or flags. E.g., <code>CISPA</code>, <code>SGP</code>, <code>USA</code></dd>
                   <dt>Gender</dt>
-                  <dd>Search by <code>male</code> or <code>female</code></dd>
+                  <dd>Search by <code>male</code>, <code>female</code>, or <code>gender:unknown</code></dd>
+                  <dt>Country</dt>
+                  <dd>Search by <code>country:USA</code>, <code>country:DEU</code>, or <code>country:unknown</code></dd>
+                  <dt>Affiliation</dt>
+                  <dd>Filter people with missing affiliation using <code>affiliation:unknown</code></dd>
                   <dt>Publications</dt>
                   <dd>Filter by publication count: <code>pubs>5</code>, <code>pubs<=10</code>, <code>pubs=7</code></dd>
                   <dt>PC memberships</dt>
                   <dd>Filter by PC count: <code>pcs>3</code>, <code>pcs>=2</code>, <code>pcs<5</code></dd>
                   <dt>Combine filters</dt>
                   <dd>Multiple filters with AND logic: <code>male pubs>5 pcs>=2</code></dd>
+                  <dt>Topic match (embeddings)</dt>
+                  <dd>Semantic search via <code>t:quantum</code> or <code>t:"compiler testing"</code>; combine with other filters like <code>China t:"compiler testing"</code></dd>
                 </dl>
               </details>
             </div>
@@ -108,19 +116,29 @@
           <ul class="person-list">
             {% for person in people %}
             <li>
-              <a
-                href="{{ url_for('index', q=query, selected=person['name'], history=history_commit, dist_tags=distribution.input) }}"
-                class="person-link {% if selected_person and selected_person['name'] == person['name'] %}active{% endif %}"
-              >
-                <strong>{{ person['name'] }}</strong>
-                <span>{{ person.get('affiliation', 'Unknown affiliation') }}</span>
-                <span class="person-meta-inline">
-                  {{ person.get('gender', 'unknown') }}
-                  {% if person.get('country') %}
-                  · {{ person.get('country') }}
+              <div class="person-item-wrapper">
+                <a
+                  href="{{ url_for('index', q=query, selected=person['name'], history=history_commit, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
+                  class="person-link {% if selected_person and selected_person['name'] == person['name'] %}active{% endif %}"
+                  {% if person.get('_topic_font_alpha') %}
+                  style="color: rgba(31, 31, 25, {{ person.get('_topic_font_alpha') }});"
+                  title="Topic similarity: {{ person.get('_topic_similarity', 0.0) }}"
                   {% endif %}
-                </span>
-              </a>
+                >
+                  <strong>{{ person['name'] }}</strong>
+                  <span>{{ person.get('affiliation') or 'Unknown affiliation' }}</span>
+                  <span class="person-meta-inline">
+                    {{ person.get('gender', 'unknown') }}
+                    {% if person.get('country') %}
+                    · {{ person.get('country') }}
+                    {% endif %}
+                    {% if person.get('_topic_similarity') is not none %}
+                    · sim {{ '%.3f'|format(person.get('_topic_similarity', 0.0)) }}
+                    {% endif %}
+                  </span>
+                </a>
+                <button type="button" class="show-expertise-btn" data-person-name="{{ person['name'] }}" title="Add to expertise chart">Show expertise</button>
+              </div>
             </li>
             {% endfor %}
             {% if not people %}
@@ -149,6 +167,8 @@
               <input type="hidden" name="q" value="{{ query }}" />
               <input type="hidden" name="history" value="{{ history_commit or '' }}" />
               <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
+              <input type="hidden" name="expertise_tags" value="{{ expertise_tags }}" />
+              <input type="hidden" name="expertise_add" value="{{ expertise_add }}" />
 
               <label for="name">Name</label>
               <input id="name" name="name" value="{{ selected_person['name'] }}" required />
@@ -186,7 +206,7 @@
                 id="country"
                 name="country"
                 value="{{ selected_person.get('country', '') }}"
-                placeholder="US, DE, SG"
+                placeholder="USA, DEU, SGP"
               />
 
               <label for="flags">Flags (space or comma separated)</label>
@@ -196,6 +216,16 @@
                 value="{{ selected_person.get('flags', []) | join(' ') }}"
                 placeholder="#invite #redflag"
               />
+              {% if top_common_tags %}
+              <div class="quick-tags" aria-label="Common tags from current search results">
+                <span class="quick-tags-label">Common tags</span>
+                <div class="quick-tags-buttons">
+                  {% for tag in top_common_tags %}
+                  <button type="button" class="quick-tag-btn" data-tag="{{ tag }}">{{ tag }}</button>
+                  {% endfor %}
+                </div>
+              </div>
+              {% endif %}
 
               <dl class="details">
                 <dt>PC memberships</dt>
@@ -242,6 +272,8 @@
               {% if selected_person %}
               <input type="hidden" name="selected" value="{{ selected_person['name'] }}" />
               {% endif %}
+              <input type="hidden" name="expertise_tags" value="{{ expertise_tags }}" />
+              <input type="hidden" name="expertise_add" value="{{ expertise_add }}" />
               <label for="dist_tags">Distribution tags</label>
               <input id="dist_tags" name="dist_tags" value="{{ distribution.input }}" placeholder="#invited #areachair" />
               <button type="submit">Update charts</button>
@@ -249,11 +281,17 @@
 
             <section class="distribution" aria-label="Gender and country distribution for selected tags">
               <p class="distribution-meta">
-                {{ distribution.matched_count }} people with
+                {{ distribution.matched_count }}
+                {% if distribution.selected_tags %}
+                people with
                 {% for tag in distribution.selected_tags %}
                 <span class="tag">{{ tag }}</span>
                 {% endfor %}
+                {% else %}
+                people (all)
+                {% endif %}
               </p>
+              <p class="chart-hint">Click a segment or legend item to run the same filter in Search People.</p>
 
               <div class="chart-wrap">
                 <h4>Gender</h4>
@@ -261,17 +299,20 @@
                 <div class="gender-chart-container">
                   <div class="gender-bar" id="genderBar">
                     {% set gender_total = distribution.gender.values() | sum %}
-                    {% set male_pct = (distribution.gender.get('male', 0) / gender_total * 100) if gender_total else 0 %}
-                    {% set female_pct = (distribution.gender.get('female', 0) / gender_total * 100) if gender_total else 0 %}
-                    {% set unknown_pct = (distribution.gender.get('unknown', 0) / gender_total * 100) if gender_total else 0 %}
-                    <div class="gender-segment male" style="width: {{ male_pct }}%" title="Male: {{ distribution.gender.get('male', 0) }}"></div>
-                    <div class="gender-segment female" style="width: {{ female_pct }}%" title="Female: {{ distribution.gender.get('female', 0) }}"></div>
-                    <div class="gender-segment unknown" style="width: {{ unknown_pct }}%" title="Unknown: {{ distribution.gender.get('unknown', 0) }}"></div>
+                    {% set male_count = distribution.gender.get('male', 0) %}
+                    {% set female_count = distribution.gender.get('female', 0) %}
+                    {% set unknown_count = distribution.gender.get('unknown', 0) %}
+                    {% set male_pct = (male_count / gender_total * 100) if gender_total else 0 %}
+                    {% set female_pct = (female_count / gender_total * 100) if gender_total else 0 %}
+                    {% set unknown_pct = (unknown_count / gender_total * 100) if gender_total else 0 %}
+                    <button type="button" class="gender-segment male chart-search-trigger" data-search-query="male" style="width: {{ male_pct }}%" title="Show all male people ({{ male_count }})" aria-label="Show all male people"{% if not male_count %} disabled{% endif %}></button>
+                    <button type="button" class="gender-segment female chart-search-trigger" data-search-query="female" style="width: {{ female_pct }}%" title="Show all female people ({{ female_count }})" aria-label="Show all female people"{% if not female_count %} disabled{% endif %}></button>
+                    <button type="button" class="gender-segment unknown chart-search-trigger" data-search-query="gender:unknown" style="width: {{ unknown_pct }}%" title="Show all people with unknown gender ({{ unknown_count }})" aria-label="Show all people with unknown gender"{% if not unknown_count %} disabled{% endif %}></button>
                   </div>
                   <div class="gender-legend">
-                    <div class="legend-item"><span class="legend-color male"></span> Male ({{ distribution.gender.get('male', 0) }})</div>
-                    <div class="legend-item"><span class="legend-color female"></span> Female ({{ distribution.gender.get('female', 0) }})</div>
-                    <div class="legend-item"><span class="legend-color unknown"></span> Unknown ({{ distribution.gender.get('unknown', 0) }})</div>
+                    <button type="button" class="legend-item chart-search-trigger" data-search-query="male"{% if not male_count %} disabled{% endif %}><span class="legend-color male"></span> Male ({{ male_count }})</button>
+                    <button type="button" class="legend-item chart-search-trigger" data-search-query="female"{% if not female_count %} disabled{% endif %}><span class="legend-color female"></span> Female ({{ female_count }})</button>
+                    <button type="button" class="legend-item chart-search-trigger" data-search-query="gender:unknown"{% if not unknown_count %} disabled{% endif %}><span class="legend-color unknown"></span> Unknown ({{ unknown_count }})</button>
                   </div>
                 </div>
                 {% else %}
@@ -312,6 +353,14 @@
                       options: {
                         responsive: true,
                         maintainAspectRatio: true,
+                        onClick: function(_, elements) {
+                          if (!elements.length || typeof window.applyDistributionSearch !== 'function') {
+                            return;
+                          }
+                          var clickedLabel = labels[elements[0].index];
+                          var countryQuery = clickedLabel === 'UNKNOWN' ? 'country:unknown' : 'country:' + clickedLabel;
+                          window.applyDistributionSearch(countryQuery);
+                        },
                         plugins: {
                           legend: {
                             position: 'right',
@@ -334,10 +383,133 @@
               </div>
             </section>
           </section>
+
+          <section class="panel expertise-panel" aria-label="Expertise map">
+            <h2>Expertise</h2>
+            <form method="get" action="{{ url_for('index') }}" class="search chart-filter" id="expertiseForm">
+              {% if history_commit %}
+              <input type="hidden" name="history" value="{{ history_commit }}" />
+              {% endif %}
+              <input type="hidden" name="q" value="{{ query }}" />
+              <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
+              {% if selected_person %}
+              <input type="hidden" name="selected" value="{{ selected_person['name'] }}" />
+              {% endif %}
+
+              <label for="expertise_tags">Base tags</label>
+              <input id="expertise_tags" name="expertise_tags" value="{{ expertise_tags }}" placeholder="#invited" />
+
+              <label for="expertise_add_topic">Add topic</label>
+              <input id="expertise_add_topic" name="expertise_add_topic" value="" placeholder="e.g., t:testing" />
+              <p class="field-note">Use search syntax like <code>t:quantum</code> or <code>t:"compiler testing"</code></p>
+
+              <div id="expertise_added_items" class="expertise-added-items"></div>
+
+              <button type="submit" id="expertiseUpdateBtn">Update expertise map</button>
+              <button type="button" id="expertiseClearBtn" class="secondary">Clear added items</button>
+            </form>
+
+            <p class="distribution-meta" id="expertiseMeta">Loading expertise projection...</p>
+            <p class="chart-hint">Points that are closer have more similar expertise embeddings.</p>
+            <div class="expertise-chart-container">
+              <canvas id="expertiseChart"></canvas>
+            </div>
+            <p class="empty" id="expertiseFallback" hidden>No expertise points are available for this selection.</p>
+          </section>
         </div>
       </section>
+
+      <footer class="page-footer">
+        <a class="footer-link" href="{{ url_for('llm_usage') }}">LLM Usage Stats</a>
+      </footer>
     </main>
   <script>
+  (function () {
+    var searchForm = document.getElementById('peopleSearchForm');
+    var searchInput = document.getElementById('q');
+    var distributionTags = {{ distribution.input | tojson }};
+
+    function normalizeTagTokens(rawTags) {
+      return String(rawTags || '')
+        .replace(/,/g, ' ')
+        .split(/\s+/)
+        .map(function (token) { return token.trim(); })
+        .filter(Boolean)
+        .map(function (token) {
+          return token.charAt(0) === '#' ? token : ('#' + token);
+        });
+    }
+
+    window.applyDistributionSearch = function (nextQuery) {
+      if (!searchForm || !searchInput || !nextQuery) {
+        return;
+      }
+
+      var nextParts = [String(nextQuery).trim()].filter(Boolean);
+      var seen = new Set(nextParts.map(function (part) { return part.toLowerCase(); }));
+
+      normalizeTagTokens(distributionTags).forEach(function (tag) {
+        var lowered = tag.toLowerCase();
+        if (!seen.has(lowered)) {
+          seen.add(lowered);
+          nextParts.push(tag);
+        }
+      });
+
+      searchInput.value = nextParts.join(' ').trim();
+      if (typeof searchForm.requestSubmit === 'function') {
+        searchForm.requestSubmit();
+      } else {
+        searchForm.submit();
+      }
+    };
+
+    document.querySelectorAll('.chart-search-trigger').forEach(function (element) {
+      element.addEventListener('click', function () {
+        var nextQuery = element.getAttribute('data-search-query');
+        window.applyDistributionSearch(nextQuery);
+      });
+    });
+  }());
+
+  (function () {
+    var flagsInput = document.getElementById('flags');
+    if (!flagsInput) {
+      return;
+    }
+
+    function normalizeTagToken(rawToken) {
+      var token = String(rawToken || '').trim().toLowerCase();
+      if (!token) {
+        return '';
+      }
+      return token.charAt(0) === '#' ? token : ('#' + token);
+    }
+
+    document.querySelectorAll('.quick-tag-btn').forEach(function (buttonEl) {
+      buttonEl.addEventListener('click', function () {
+        var tag = normalizeTagToken(buttonEl.getAttribute('data-tag'));
+        if (!tag) {
+          return;
+        }
+
+        var existingTokens = String(flagsInput.value || '')
+          .replace(/,/g, ' ')
+          .split(/\s+/)
+          .map(normalizeTagToken)
+          .filter(Boolean);
+
+        if (existingTokens.includes(tag)) {
+          return;
+        }
+
+        var currentValue = String(flagsInput.value || '').trim();
+        flagsInput.value = currentValue ? (currentValue + ' ' + tag) : tag;
+        flagsInput.focus();
+      });
+    });
+  }());
+
   (function () {
     var cleanRunning = {{ 'true' if clean_running else 'false' }};
     if (!cleanRunning) return;
@@ -346,6 +518,8 @@
     var query = {{ query | tojson }};
     var historyCommit = {{ history_commit | tojson }};
     var distTags = {{ distribution.input | tojson }};
+    var expertiseTags = {{ expertise_tags | tojson }};
+    var expertiseAdd = {{ expertise_add | tojson }};
     var bannerEl = document.getElementById('clean-banner');
     var editorEl = document.querySelector('.editor');
 
@@ -370,6 +544,8 @@
             '/?q=' + encodeURIComponent(query || '') +
             '&selected=' + encodeURIComponent(resultName || '') +
             '&dist_tags=' + encodeURIComponent(distTags || '') +
+            '&expertise_tags=' + encodeURIComponent(expertiseTags || '') +
+            '&expertise_add=' + encodeURIComponent(expertiseAdd || '') +
             (historyCommit ? '&history=' + encodeURIComponent(historyCommit) : '')
           );
         }, 1500);
@@ -390,6 +566,289 @@
     }
 
     setTimeout(poll, 2000);
+  }());
+
+  (function () {
+    var chartEl = document.getElementById('expertiseChart');
+    var fallbackEl = document.getElementById('expertiseFallback');
+    var metaEl = document.getElementById('expertiseMeta');
+    var addedItemsContainer = document.getElementById('expertise_added_items');
+    var topicInput = document.getElementById('expertise_add_topic');
+    var updateBtn = document.getElementById('expertiseUpdateBtn');
+    var clearBtn = document.getElementById('expertiseClearBtn');
+    var expertiseForm = document.getElementById('expertiseForm');
+    
+    if (!chartEl || !metaEl || typeof Chart === 'undefined') {
+      return;
+    }
+
+    var historyCommit = {{ history_commit | tojson }};
+    var expertiseTags = {{ expertise_tags | tojson }};
+    var addedPeople = [];
+    var addedTopics = [];
+    var currentChart = null;
+
+    function renderAddedItems() {
+      if (!addedItemsContainer) return;
+      addedItemsContainer.innerHTML = '';
+      
+      addedPeople.forEach(function (person) {
+        var item = document.createElement('div');
+        item.className = 'expertise-added-item';
+        item.innerHTML = '<span>👤 ' + person + '</span>' +
+          '<button type="button" class="expertise-added-item-remove" data-type="person" data-value="' + person + '">×</button>';
+        addedItemsContainer.appendChild(item);
+      });
+      
+      addedTopics.forEach(function (topic) {
+        var item = document.createElement('div');
+        item.className = 'expertise-added-item';
+        item.innerHTML = '<span>🔍 ' + topic + '</span>' +
+          '<button type="button" class="expertise-added-item-remove" data-type="topic" data-value="' + topic + '">×</button>';
+        addedItemsContainer.appendChild(item);
+      });
+
+      addedItemsContainer.querySelectorAll('.expertise-added-item-remove').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          var type = btn.getAttribute('data-type');
+          var value = btn.getAttribute('data-value');
+          if (type === 'person') {
+            addedPeople = addedPeople.filter(function (p) { return p !== value; });
+          } else if (type === 'topic') {
+            addedTopics = addedTopics.filter(function (t) { return t !== value; });
+          }
+          renderAddedItems();
+          reloadChart();
+        });
+      });
+    }
+
+    function reloadChart() {
+      if (!chartEl || !metaEl) return;
+      
+      // Read current expertise tags from the input field, not the cached template variable
+      var expertiseTagsInput = document.getElementById('expertise_tags');
+      var currentExpertiseTags = expertiseTagsInput ? expertiseTagsInput.value : (expertiseTags || '');
+      
+      var params = new URLSearchParams();
+      if (historyCommit) params.set('history', historyCommit);
+      params.set('tags', currentExpertiseTags || '');
+      
+      if (addedPeople.length > 0) {
+        params.set('add_people', addedPeople.join('||'));
+      }
+      if (addedTopics.length > 0) {
+        params.set('add_topics', addedTopics.join('||'));
+      }
+
+      fetch('/api/expertise?' + params.toString())
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error('Failed to load expertise map');
+          }
+          return response.json();
+        })
+        .then(function (payload) {
+          var points = Array.isArray(payload.points) ? payload.points : [];
+          var basePoints = points.filter(function (point) { return point.point_type === 'base'; });
+          var addedPoints = points.filter(function (point) { return point.point_type === 'added'; });
+
+          if (!points.length) {
+            if (fallbackEl) fallbackEl.hidden = false;
+            metaEl.textContent = 'No embeddings found for this selection.';
+            if (currentChart) {
+              currentChart.destroy();
+              currentChart = null;
+            }
+            return;
+          }
+
+          var missingText = payload.without_embeddings
+            ? ' (' + payload.without_embeddings + ' missing embeddings)'
+            : '';
+          metaEl.textContent =
+            payload.with_embeddings + ' points shown from ' + payload.selected_count + ' selected' + missingText + '.';
+
+          if (fallbackEl) fallbackEl.hidden = true;
+
+          if (currentChart) {
+            currentChart.destroy();
+          }
+
+          currentChart = new Chart(chartEl.getContext('2d'), {
+            type: 'scatter',
+            data: {
+              datasets: [
+                {
+                  label: 'Tag selection',
+                  data: basePoints,
+                  parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+                  backgroundColor: 'rgba(14, 106, 97, 0.78)',
+                  borderColor: 'rgba(14, 106, 97, 1)',
+                  borderWidth: 1,
+                  pointRadius: 4,
+                  pointHoverRadius: 6
+                },
+                {
+                  label: 'Added',
+                  data: addedPoints,
+                  parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+                  backgroundColor: 'rgba(169, 95, 30, 0.9)',
+                  borderColor: 'rgba(169, 95, 30, 1)',
+                  borderWidth: 1.2,
+                  pointRadius: 6,
+                  pointHoverRadius: 8
+                }
+              ]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              scales: {
+                x: {
+                  title: { display: true, text: 'Component 1' },
+                  grid: { color: 'rgba(84, 62, 44, 0.12)' }
+                },
+                y: {
+                  title: { display: true, text: 'Component 2' },
+                  grid: { color: 'rgba(84, 62, 44, 0.12)' }
+                }
+              },
+              plugins: {
+                tooltip: {
+                  callbacks: {
+                    label: function (context) {
+                      var point = context.raw || {};
+                      var details = [point.name || 'Unknown'];
+                      if (typeof point.publication_count === 'number') {
+                        details.push('target pubs: ' + point.publication_count);
+                      }
+                      return details.join(' | ');
+                    }
+                  }
+                },
+                legend: {
+                  labels: {
+                    font: { family: '"Chivo", sans-serif', size: 12 },
+                    color: '#1f1f19'
+                  }
+                }
+              }
+            }
+          });
+        })
+        .catch(function () {
+          if (fallbackEl) fallbackEl.hidden = false;
+          metaEl.textContent = 'Could not load expertise projection.';
+        });
+    }
+
+    // Handle "Update expertise map" form submission
+    if (updateBtn) {
+      updateBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        
+        if (topicInput && topicInput.value.trim()) {
+          var topicValue = topicInput.value.trim();
+          if (!addedTopics.includes(topicValue)) {
+            addedTopics.push(topicValue);
+            topicInput.value = '';
+          }
+        }
+        
+        renderAddedItems();
+        reloadChart();
+      });
+    }
+
+    // Handle "Clear added items" button
+    if (clearBtn) {
+      clearBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        addedPeople = [];
+        addedTopics = [];
+        if (topicInput) topicInput.value = '';
+        renderAddedItems();
+        reloadChart();
+      });
+    }
+
+    // Allow Enter key in the topic input to add and update
+    if (topicInput) {
+      topicInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (updateBtn) updateBtn.click();
+        }
+      });
+    }
+
+    // Initial load
+    reloadChart();
+  }());
+
+  (function () {
+    // Handle "Show expertise" buttons in the Search People panel
+    document.querySelectorAll('.show-expertise-btn').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        var personName = btn.getAttribute('data-person-name');
+        var addedItemsContainer = document.getElementById('expertise_added_items');
+        var topicInput = document.getElementById('expertise_add_topic');
+        
+        // Get the added items from the expertise panel
+        var addedPeople = [];
+        var addedTopics = [];
+        
+        if (addedItemsContainer) {
+          addedItemsContainer.querySelectorAll('.expertise-added-item').forEach(function (item) {
+            var removeBtn = item.querySelector('.expertise-added-item-remove');
+            if (removeBtn) {
+              var type = removeBtn.getAttribute('data-type');
+              var value = removeBtn.getAttribute('data-value');
+              if (type === 'person') {
+                addedPeople.push(value);
+              } else if (type === 'topic') {
+                addedTopics.push(value);
+              }
+            }
+          });
+        }
+        
+        // Add the clicked person
+        if (personName && !addedPeople.includes(personName)) {
+          addedPeople.push(personName);
+        }
+        
+        // Update the container and reload
+        if (addedItemsContainer) {
+          addedItemsContainer.innerHTML = '';
+          addedPeople.forEach(function (person) {
+            var item = document.createElement('div');
+            item.className = 'expertise-added-item';
+            item.innerHTML = '<span>👤 ' + person + '</span>' +
+              '<button type="button" class="expertise-added-item-remove" data-type="person" data-value="' + person + '">×</button>';
+            addedItemsContainer.appendChild(item);
+          });
+          addedTopics.forEach(function (topic) {
+            var item = document.createElement('div');
+            item.className = 'expertise-added-item';
+            item.innerHTML = '<span>🔍 ' + topic + '</span>' +
+              '<button type="button" class="expertise-added-item-remove" data-type="topic" data-value="' + topic + '">×</button>';
+            addedItemsContainer.appendChild(item);
+          });
+        }
+        
+        // Trigger a chart update
+        var updateBtn = document.getElementById('expertiseUpdateBtn');
+        if (updateBtn) {
+          setTimeout(function () {
+            updateBtn.click();
+          }, 100);
+        }
+      });
+    });
   }());
   </script>
   </body>

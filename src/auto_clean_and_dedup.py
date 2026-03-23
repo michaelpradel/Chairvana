@@ -231,6 +231,7 @@ def _clean_people_batch(batch: list[dict[str, Any]], start: int, total: int, mod
     parsed = parse_structured_response(
         input_text=_clean_batch_prompt(batch),
         response_model=CleanBatchResult,
+        description="clean people batch",
         model=model,
     )
 
@@ -284,6 +285,7 @@ def _detect_duplicate_groups(names: list[str], model: str) -> list[DuplicateGrou
     parsed = parse_structured_response(
         input_text=_duplicate_prompt(names),
         response_model=DuplicateDetectionResult,
+        description="detect duplicate names",
         model=model,
     )
     return parsed.groups
@@ -346,6 +348,7 @@ def _merge_pair(canonical_name: str, first: dict[str, Any], second: dict[str, An
             parsed = parse_structured_response(
                 input_text=prompt,
                 response_model=MergeDuplicateResult,
+                description="merge duplicate pair",
                 model=model,
             )
             merged = _merge_dict_local(first, second)
