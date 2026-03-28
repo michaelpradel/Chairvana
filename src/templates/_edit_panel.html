@@ -1,0 +1,132 @@
+<section class="panel edit-panel">
+  {% if selected_person or add_person_mode %}
+  {% set editor_person = selected_person if selected_person else {} %}
+  <h2>Edit Person</h2>
+  {% if add_person_mode %}
+  <div class="history-notice">Creating a new person entry. Name must be unique.</div>
+  {% endif %}
+  {% if not history_is_head and history_entry %}
+  <div class="history-notice">
+    Viewing snapshot {{ history_entry.short_commit }}. Saving from this view will discard newer `people.jsonl` commits and replace them with a new commit.
+  </div>
+  {% endif %}
+  {% if clean_running %}
+  <div class="clean-status running" id="clean-banner">
+    <span class="spinner"></span>
+    Cleaning affiliation data&hellip; other edits are disabled.
+  </div>
+  {% endif %}
+  <div class="clean-status success" id="save-status-banner" hidden></div>
+  <form method="post" action="{{ url_for('create_person') if add_person_mode else url_for('update_person') }}" class="editor{{ ' is-locked' if clean_running else '' }}" id="editorForm">
+    {% if not add_person_mode %}
+    <input type="hidden" name="original_name" value="{{ selected_person['name'] }}" />
+    {% endif %}
+    <input type="hidden" name="q" value="{{ query }}" />
+    <input type="hidden" name="sort" value="{{ sort_mode }}" />
+    <input type="hidden" name="history" value="{{ history_commit or '' }}" />
+    <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
+    <input type="hidden" name="expertise_tags" value="{{ expertise_tags }}" />
+    <input type="hidden" name="expertise_add" value="{{ expertise_add }}" />
+
+    <label for="name">Name</label>
+    <input id="name" name="name" value="{{ editor_person.get('name', '') }}" required />
+
+    <label for="affiliation">Affiliation</label>
+    <input
+      id="affiliation"
+      name="affiliation"
+      value="{{ editor_person.get('affiliation', '') }}"
+    />
+
+    <label for="homepage">Homepage</label>
+    <input
+      id="homepage"
+      name="homepage"
+      value="{{ editor_person.get('homepage', '') }}"
+      placeholder="https://example.edu/~person"
+    />
+    <div class="field-note" id="homepage-current-note"{% if not editor_person.get('homepage') %} hidden{% endif %}>
+      Current: <a href="{{ editor_person.get('homepage') or '#' }}" target="_blank" rel="noopener noreferrer" id="homepage-current-link">{{ editor_person.get('homepage') or '' }}</a>
+    </div>
+
+    <label for="gender">Gender</label>
+    <input
+      id="gender"
+      name="gender"
+      value="{{ editor_person.get('gender', '') }}"
+      placeholder="female, male, unknown"
+    />
+
+    <label for="country">Country</label>
+    <input
+      id="country"
+      name="country"
+      value="{{ editor_person.get('country', '') }}"
+      placeholder="USA, DEU, SGP"
+      maxlength="3"
+      minlength="3"
+      pattern="[A-Za-z]{3}"
+      title="Use a 3-letter country code like DEU"
+      oninput="this.value = this.value.toUpperCase()"
+    />
+
+    <label for="flags">Flags (space or comma separated)</label>
+    <input
+      id="flags"
+      name="flags"
+      value="{{ editor_person.get('flags', []) | join(' ') }}"
+      placeholder="#invite #redflag"
+    />
+    {% if top_common_tags %}
+    <div class="quick-tags" aria-label="Common tags from current search results">
+      <span class="quick-tags-label">Common tags</span>
+      <div class="quick-tags-buttons">
+        {% for tag in top_common_tags %}
+        <button type="button" class="quick-tag-btn" data-tag="{{ tag }}">{{ tag }}</button>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if not add_person_mode %}
+    <dl class="details">
+      <dt>PC memberships</dt>
+      <dd>
+        {% if editor_person.get('pc_memberships') %}
+        {% for m in editor_person.get('pc_memberships', []) %}
+        <span class="tag">{{ m.get('conference', '?') }} {{ m.get('year', '?') }}</span>
+        {% endfor %}
+        {% else %}
+        None
+        {% endif %}
+      </dd>
+      <dt>Publications</dt>
+      <dd>
+        {% set pub_summary = editor_person.get('publication_summary') %}
+        {% if publication_display_counts %}
+        {% for venue_label, count in publication_display_counts %}
+        <span class="tag">{{ venue_label }}: {{ count }}</span>
+        {% endfor %}
+        <span class="tag-secondary">Total: {{ pub_summary.get('total', 0) }}{% if pub_summary.get('year_range') %} ({{ pub_summary['year_range'][0] }}–{{ pub_summary['year_range'][1] }}){% endif %}</span>
+        {% else %}
+        None
+        {% endif %}
+      </dd>
+    </dl>
+    {% endif %}
+
+    <div class="form-actions">
+      {% if not add_person_mode %}
+      <button type="button" class="show-expertise-btn secondary" data-person-name="{{ selected_person['name'] }}" title="Add {{ selected_person['name'] }} to the expertise chart">Show expertise</button>
+      <button type="submit" formaction="{{ url_for('sync_person_publications') }}" class="secondary"{% if clean_running %} disabled{% endif %} title="Auto-complete publication summary from DBLP for {{ selected_person['name'] }}">Auto-complete publications</button>
+      {% endif %}
+      <button type="submit" class="primary"{% if not add_person_mode %} data-async-save="true" id="editorSaveBtn"{% endif %}{% if clean_running %} disabled{% endif %}>{{ 'Add person' if add_person_mode else 'Save changes' }}</button>
+      {% if not add_person_mode %}
+      <button type="submit" formaction="{{ url_for('delete_person') }}" class="danger"{% if clean_running %} disabled{% endif %} onclick="return confirm('Are you sure you want to delete {{ selected_person['name'] | escape }}? This cannot be undone.');">Delete person</button>
+      {% endif %}
+    </div>
+  </form>
+  {% else %}
+  <p>Select a person to edit.</p>
+  {% endif %}
+</section>

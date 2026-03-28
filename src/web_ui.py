@@ -62,6 +62,58 @@ TOPIC_STRONG_SIMILARITY = 0.42
 TOPIC_TOOLTIP_NEIGHBOR_COUNT = 3
 TOPIC_TOOLTIP_MAX_YEARS_BACK = 5
 
+SORT_MODE_RANDOM = "random"
+SORT_MODE_ALPHA = "alpha"
+_VALID_SORT_MODES = {SORT_MODE_RANDOM, SORT_MODE_ALPHA}
+
+_GLOBAL_REGIONS = ["North America", "South America", "Europe", "Asia", "Africa"]
+
+# Keep the region set fixed to five buckets for the Distribution panel.
+# Oceania and Antarctica country codes are grouped into Asia and Africa, respectively.
+_REGION_COUNTRY_CODES: dict[str, set[str]] = {
+    "North America": {
+        "AIA", "ATG", "ABW", "BHS", "BRB", "BLZ", "BMU", "BES", "VGB", "CAN", "CYM", "CRI", "CUB",
+        "CUW", "DMA", "DOM", "SLV", "GRL", "GRD", "GLP", "GTM", "HTI", "HND", "JAM", "MTQ", "MEX",
+        "MSR", "NIC", "PAN", "PRI", "BLM", "KNA", "LCA", "MAF", "SPM", "VCT", "SXM", "TTO", "TCA",
+        "USA", "VIR", "UMI",
+    },
+    "South America": {
+        "ARG", "BOL", "BRA", "CHL", "COL", "ECU", "FLK", "GUF", "GUY", "PRY", "PER", "SGS", "SUR",
+        "URY", "VEN",
+    },
+    "Europe": {
+        "ALB", "AND", "AUT", "BLR", "BEL", "BIH", "BGR", "HRV", "CZE", "DNK", "EST", "FRO", "FIN",
+        "FRA", "DEU", "GIB", "GRC", "GGY", "VAT", "HUN", "ISL", "IRL", "IMN", "ITA", "JEY", "LVA",
+        "LIE", "LTU", "LUX", "MLT", "MDA", "MCO", "MNE", "NLD", "MKD", "NOR", "POL", "PRT", "ROU",
+        "RUS", "SMR", "SRB", "SVK", "SVN", "ESP", "SJM", "SWE", "CHE", "UKR", "GBR", "ALA",
+    },
+    "Asia": {
+        "AFG", "ARM", "AZE", "BHR", "BGD", "BTN", "BRN", "KHM", "CHN", "CXR", "CCK", "CYP", "GEO",
+        "HKG", "IND", "IDN", "IRN", "IRQ", "ISR", "JPN", "JOR", "KAZ", "KWT", "KGZ", "LAO", "LBN",
+        "MAC", "MYS", "MDV", "MNG", "MMR", "NPL", "PRK", "OMN", "PAK", "PSE", "PHL", "QAT", "SAU",
+        "SGP", "KOR", "LKA", "SYR", "TWN", "TJK", "THA", "TLS", "TUR", "TKM", "ARE", "UZB", "VNM",
+        "YEM", "IOT",
+        # Oceania grouped into Asia to keep the required five-region chart.
+        "ASM", "AUS", "COK", "FJI", "PYF", "GUM", "HMD", "KIR", "MHL", "FSM", "NRU", "NCL", "NZL",
+        "NIU", "NFK", "MNP", "PLW", "PNG", "PCN", "WSM", "SLB", "TKL", "TON", "TUV", "VUT", "WLF",
+    },
+    "Africa": {
+        "DZA", "AGO", "BEN", "BWA", "BFA", "BDI", "CPV", "CMR", "CAF", "TCD", "COM", "COG", "COD",
+        "CIV", "DJI", "EGY", "GNQ", "ERI", "SWZ", "ETH", "GAB", "GMB", "GHA", "GIN", "GNB", "KEN",
+        "LSO", "LBR", "LBY", "MDG", "MWI", "MLI", "MRT", "MUS", "MYT", "MAR", "MOZ", "NAM", "NER",
+        "NGA", "REU", "RWA", "SHN", "STP", "SEN", "SYC", "SLE", "SOM", "ZAF", "SSD", "SDN", "TZA",
+        "TGO", "TUN", "UGA", "ESH", "ZMB", "ZWE",
+        # Antarctica grouped into Africa to keep the required five-region chart.
+        "ATA",
+    },
+}
+
+COUNTRY_CODE_TO_REGION: dict[str, str] = {
+    country_code: region
+    for region, country_codes in _REGION_COUNTRY_CODES.items()
+    for country_code in country_codes
+}
+
 _dblp_engine_lock = threading.Lock()
 _dblp_engine: DblpQueryEngine | None = None
 
@@ -394,6 +446,7 @@ def _tagged_people_distribution(commit: str | None, tag_query: str) -> dict[str,
 
     gender_counter: Counter[str] = Counter()
     country_counter: Counter[str] = Counter()
+    region_counter: Counter[str] = Counter()
 
     for person in matched_people:
         gender = person.get("gender")
@@ -404,7 +457,11 @@ def _tagged_people_distribution(commit: str | None, tag_query: str) -> dict[str,
 
         country = person.get("country")
         if isinstance(country, str) and country.strip():
-            country_counter[country.strip().upper()] += 1
+            normalized_country = country.strip().upper()
+            country_counter[normalized_country] += 1
+            region = COUNTRY_CODE_TO_REGION.get(normalized_country)
+            if region is not None:
+                region_counter[region] += 1
         else:
             country_counter["UNKNOWN"] += 1
 
@@ -414,6 +471,11 @@ def _tagged_people_distribution(commit: str | None, tag_query: str) -> dict[str,
         "matched_count": len(matched_people),
         "gender": dict(gender_counter.most_common()),
         "country": dict(country_counter.most_common(12)),
+        "region": {
+            region: region_counter[region]
+            for region in _GLOBAL_REGIONS
+            if region_counter[region] > 0
+        },
     }
 
 
@@ -449,6 +511,7 @@ def _parse_search_query(query: str) -> dict[str, Any]:
     Parse a search query into structured filters.
     Supports:
     - Text search: matches name, affiliation, country, flags
+    - Tag absence: "-#invite" or "-invite"
     - Gender: "male", "female", or "gender:unknown"
     - Country: "country:USA", "country:DEU", or "country:unknown"
     - Affiliation presence: "affiliation:unknown"
@@ -463,6 +526,7 @@ def _parse_search_query(query: str) -> dict[str, Any]:
     filters: dict[str, Any] = {
         "text": [],
         "topics": [],
+        "exclude_tags": [],
         "gender": None,
         "country": None,
         "affiliation_state": None,
@@ -486,6 +550,14 @@ def _parse_search_query(query: str) -> dict[str, Any]:
             continue
 
         lowered_token = token.casefold()
+
+        # Exclude people who have the given tag, e.g., -#invite or -invite.
+        if re.match(r"^-#?[a-z0-9_\-]+$", lowered_token):
+            raw_tag = lowered_token[1:]
+            normalized_tag = raw_tag if raw_tag.startswith("#") else f"#{raw_tag}"
+            if normalized_tag != "#" and normalized_tag not in filters["exclude_tags"]:
+                filters["exclude_tags"].append(normalized_tag)
+            continue
 
         # Semantic topic filter (quoted phrases supported via shlex, e.g., t:"compiler testing").
         if lowered_token.startswith("t:"):
@@ -664,6 +736,20 @@ def _project_embeddings_2d(embeddings: list[list[float]]) -> list[tuple[float, f
 
 def _matches_search_filters(person: dict[str, Any], filters: dict[str, Any]) -> bool:
     """Check if a person matches all the parsed search filters."""
+    flags = person.get("flags")
+    normalized_flags: set[str] = set()
+    if isinstance(flags, list):
+        normalized_flags = {
+            (flag.strip().casefold() if flag.strip().startswith("#") else f"#{flag.strip().casefold()}")
+            for flag in flags
+            if isinstance(flag, str) and flag.strip()
+        }
+
+    # Check absent-tag filter.
+    if filters["exclude_tags"]:
+        if any(tag in normalized_flags for tag in filters["exclude_tags"]):
+            return False
+
     # Check gender filter
     if filters["gender"] is not None:
         raw_gender = person.get("gender")
@@ -711,7 +797,6 @@ def _matches_search_filters(person: dict[str, Any], filters: dict[str, Any]) -> 
         name = str(person.get("name", "")).casefold()
         affiliation = str(person.get("affiliation", "")).casefold()
         country = str(person.get("country", "")).casefold()
-        flags = person.get("flags")
         flags_text = " ".join(flags).casefold() if isinstance(flags, list) else ""
 
         searchable_text = f"{name} {affiliation} {country} {flags_text}"
@@ -747,14 +832,28 @@ def _normalize_country_code(raw_country: str) -> str:
     return normalized
 
 
-def _filtered_people(query: str, commit: str | None = None) -> tuple[list[dict[str, Any]], int]:
+def _normalize_sort_mode(raw_sort_mode: str) -> str:
+    sort_mode = raw_sort_mode.strip().casefold()
+    if sort_mode in _VALID_SORT_MODES:
+        return sort_mode
+    return SORT_MODE_RANDOM
+
+
+def _sorted_people(people: list[dict[str, Any]], sort_mode: str) -> list[dict[str, Any]]:
+    if sort_mode == SORT_MODE_ALPHA:
+        return sorted(people, key=lambda person: str(person.get("name", "")).casefold())
+
+    shuffled_people = list(people)
+    random.shuffle(shuffled_people)
+    return shuffled_people
+
+
+def _filtered_people(query: str, sort_mode: str, commit: str | None = None) -> tuple[list[dict[str, Any]], int]:
     people = store.list_people(commit=commit)
     total_count = len(people)
 
     if not query.strip():
-        shuffled_people = list(people)
-        random.shuffle(shuffled_people)
-        return shuffled_people, total_count
+        return _sorted_people(people, sort_mode), total_count
 
     filters = _parse_search_query(query)
 
@@ -852,7 +951,7 @@ def _filtered_people(query: str, commit: str | None = None) -> tuple[list[dict[s
         else:
             filtered = []
 
-    return filtered, total_count
+    return _sorted_people(filtered, sort_mode), total_count
 
 
 def _publication_display_counts(person: dict[str, Any] | None) -> list[tuple[str, int]]:
@@ -887,20 +986,60 @@ def _publication_display_counts(person: dict[str, Any] | None) -> list[tuple[str
     return sorted(aggregated.items(), key=lambda item: (display_order.index(item[0]) if item[0] in display_order else len(display_order), item[0]))
 
 
-@app.get("/")
-def index() -> str:
-    query = request.args.get("q", "")
-    selected_name = request.args.get("selected", "").strip()
-    add_person_mode = request.args.get("add_person", "").strip().casefold() in {"1", "true", "yes"}
-    requested_history = request.args.get("history", "").strip()
-    dist_tags = request.args.get("dist_tags", "#invite").strip()
-    expertise_tags = request.args.get("expertise_tags", dist_tags).strip()
-    expertise_add = request.args.get("expertise_add", "").strip()
-    gap_tag = request.args.get("gap_tag", "#invite").strip() or "#invite"
-    gap_year_start = request.args.get("gap_year_start", "2024").strip() or "2024"
-    gap_year_end = request.args.get("gap_year_end", "2026").strip() or "2026"
-    gap_min_similarity = request.args.get("gap_min_similarity", "0.7").strip() or "0.7"
+def _request_wants_json() -> bool:
+    requested_with = request.headers.get("X-Requested-With", "")
+    if requested_with.casefold() == "xmlhttprequest":
+        return True
 
+    best = request.accept_mimetypes.best_match(["application/json", "text/html"])
+    return best == "application/json" and (
+        request.accept_mimetypes["application/json"] >= request.accept_mimetypes["text/html"]
+    )
+
+
+def _person_publication_count(person: dict[str, Any]) -> int:
+    pub_summary = person.get("publication_summary")
+    if not isinstance(pub_summary, dict):
+        return 0
+
+    total = pub_summary.get("total")
+    if isinstance(total, int) and total >= 0:
+        return total
+    return 0
+
+
+def _person_prior_pc_count(person: dict[str, Any]) -> int:
+    pc_memberships = person.get("pc_memberships")
+    if not isinstance(pc_memberships, list):
+        return 0
+    return sum(1 for membership in pc_memberships if isinstance(membership, dict))
+
+
+def _enrich_people_for_search_list(people: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    enriched_people: list[dict[str, Any]] = []
+    for person in people:
+        enriched_person = dict(person)
+        enriched_person["_publication_count"] = _person_publication_count(person)
+        enriched_person["_prior_pc_count"] = _person_prior_pc_count(person)
+        enriched_people.append(enriched_person)
+    return enriched_people
+
+
+def _build_index_context(
+    *,
+    query: str,
+    sort_mode: str,
+    selected_name: str,
+    add_person_mode: bool,
+    requested_history: str,
+    dist_tags: str,
+    expertise_tags: str,
+    expertise_add: str,
+    gap_tag: str,
+    gap_year_start: str,
+    gap_year_end: str,
+    gap_min_similarity: str,
+) -> dict[str, Any]:
     try:
         history_state = store.get_history_state(requested_history or None)
     except ValueError as exc:
@@ -909,11 +1048,20 @@ def index() -> str:
 
     active_commit = None if history_state["is_head"] else history_state["current_commit"]
 
-    people, total_people_count = _filtered_people(query, active_commit)
+    people, total_people_count = _filtered_people(query, sort_mode, active_commit)
+    people = _enrich_people_for_search_list(people)
     matched_people_count = len(people)
     all_people = store.list_people(commit=active_commit)
-    top_common_tags = _top_common_tags(people) or _top_common_tags(all_people)
-    distribution = _tagged_people_distribution(active_commit, dist_tags)
+    top_common_tags = _top_common_tags(all_people)
+    distribution = {
+        "input": " ".join(_normalize_tag_query(dist_tags)),
+        "selected_tags": _normalize_tag_query(dist_tags),
+        "matched_count": 0,
+        "gender": {},
+        "country": {},
+        "region": {},
+        "loading": True,
+    }
 
     selected_person: dict[str, Any] | None = None
     if selected_name and not add_person_mode:
@@ -928,32 +1076,218 @@ def index() -> str:
     with _clean_lock:
         clean_running = _clean_status["running"]
 
-    return render_template(
-        "index.html",
-        people=people,
-        top_common_tags=top_common_tags,
-        selected_person=selected_person,
-        add_person_mode=add_person_mode,
-        publication_display_counts=_publication_display_counts(selected_person),
-        selected_name=selected_name,
+    return {
+        "people": people,
+        "top_common_tags": top_common_tags,
+        "selected_person": selected_person,
+        "add_person_mode": add_person_mode,
+        "publication_display_counts": _publication_display_counts(selected_person),
+        "selected_name": selected_name,
+        "query": query,
+        "sort_mode": sort_mode,
+        "total_people_count": total_people_count,
+        "matched_people_count": matched_people_count,
+        "clean_running": clean_running,
+        "history_commit": history_state["current_commit"],
+        "history_entry": history_state["current_entry"],
+        "history_is_head": history_state["is_head"],
+        "older_history_commit": history_state["older_commit"],
+        "newer_history_commit": history_state["newer_commit"],
+        "distribution": distribution,
+        "expertise_tags": expertise_tags,
+        "expertise_add": expertise_add,
+        "gap_tag": gap_tag,
+        "gap_year_start": gap_year_start,
+        "gap_year_end": gap_year_end,
+        "gap_min_similarity": gap_min_similarity,
+        "all_people_names": [person.get("name", "") for person in all_people if person.get("name")],
+    }
+
+
+@app.get("/")
+def index() -> str:
+    query = request.args.get("q", "")
+    sort_mode = _normalize_sort_mode(request.args.get("sort", SORT_MODE_RANDOM))
+    selected_name = request.args.get("selected", "").strip()
+    add_person_mode = request.args.get("add_person", "").strip().casefold() in {"1", "true", "yes"}
+    requested_history = request.args.get("history", "").strip()
+    dist_tags = request.args.get("dist_tags", "#invite").strip()
+    expertise_tags = request.args.get("expertise_tags", dist_tags).strip()
+    expertise_add = request.args.get("expertise_add", "").strip()
+    gap_tag = request.args.get("gap_tag", "#invite").strip() or "#invite"
+    gap_year_start = request.args.get("gap_year_start", "2024").strip() or "2024"
+    gap_year_end = request.args.get("gap_year_end", "2026").strip() or "2026"
+    gap_min_similarity = request.args.get("gap_min_similarity", "0.7").strip() or "0.7"
+
+    context = _build_index_context(
         query=query,
-        total_people_count=total_people_count,
-        matched_people_count=matched_people_count,
-        clean_running=clean_running,
-        history_commit=history_state["current_commit"],
-        history_entry=history_state["current_entry"],
-        history_is_head=history_state["is_head"],
-        older_history_commit=history_state["older_commit"],
-        newer_history_commit=history_state["newer_commit"],
-        distribution=distribution,
+        sort_mode=sort_mode,
+        selected_name=selected_name,
+        add_person_mode=add_person_mode,
+        requested_history=requested_history,
+        dist_tags=dist_tags,
         expertise_tags=expertise_tags,
         expertise_add=expertise_add,
         gap_tag=gap_tag,
         gap_year_start=gap_year_start,
         gap_year_end=gap_year_end,
         gap_min_similarity=gap_min_similarity,
-        all_people_names=[person.get("name", "") for person in all_people if person.get("name")],
     )
+    return render_template("index.html", **context)
+
+
+@app.get("/api/panels")
+def panels_data() -> Any:
+    query = request.args.get("q", "")
+    sort_mode = _normalize_sort_mode(request.args.get("sort", SORT_MODE_RANDOM))
+    selected_name = request.args.get("selected", "").strip()
+    add_person_mode = request.args.get("add_person", "").strip().casefold() in {"1", "true", "yes"}
+    requested_history = request.args.get("history", "").strip()
+    dist_tags = request.args.get("dist_tags", "#invite").strip()
+    expertise_tags = request.args.get("expertise_tags", dist_tags).strip()
+    expertise_add = request.args.get("expertise_add", "").strip()
+    gap_tag = request.args.get("gap_tag", "#invite").strip() or "#invite"
+    gap_year_start = request.args.get("gap_year_start", "2024").strip() or "2024"
+    gap_year_end = request.args.get("gap_year_end", "2026").strip() or "2026"
+    gap_min_similarity = request.args.get("gap_min_similarity", "0.7").strip() or "0.7"
+
+    context = _build_index_context(
+        query=query,
+        sort_mode=sort_mode,
+        selected_name=selected_name,
+        add_person_mode=add_person_mode,
+        requested_history=requested_history,
+        dist_tags=dist_tags,
+        expertise_tags=expertise_tags,
+        expertise_add=expertise_add,
+        gap_tag=gap_tag,
+        gap_year_start=gap_year_start,
+        gap_year_end=gap_year_end,
+        gap_min_similarity=gap_min_similarity,
+    )
+
+    return jsonify(
+        {
+            "list_html": render_template("_list_panel.html", **context),
+            "edit_html": render_template("_edit_panel.html", **context),
+            "selected_name": context["selected_person"]["name"] if context.get("selected_person") else "",
+        }
+    )
+
+
+@app.post("/people/add-tag")
+def add_tag_to_filtered_people() -> Any:
+    query = request.form.get("q", "")
+    sort_mode = _normalize_sort_mode(request.form.get("sort", SORT_MODE_RANDOM))
+    history_commit = request.form.get("history", "").strip() or None
+    dist_tags = request.form.get("dist_tags", "#invite").strip()
+    expertise_tags = request.form.get("expertise_tags", dist_tags).strip()
+    expertise_add = request.form.get("expertise_add", "").strip()
+    selected_name = request.form.get("selected", "").strip()
+    raw_bulk_tag = request.form.get("bulk_tag", "").strip()
+
+    normalized_tags = _normalize_tag_query(raw_bulk_tag)
+    if len(normalized_tags) != 1:
+        flash("Please provide exactly one tag (for example: #invite).", "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                sort=sort_mode,
+                selected=selected_name,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
+
+    with _clean_lock:
+        if _clean_status["running"]:
+            flash("Cannot apply tags while affiliation cleaning is in progress.", "error")
+            return redirect(
+                url_for(
+                    "index",
+                    q=query,
+                    sort=sort_mode,
+                    selected=selected_name,
+                    history=history_commit,
+                    dist_tags=dist_tags,
+                    expertise_tags=expertise_tags,
+                    expertise_add=expertise_add,
+                )
+            )
+
+    filtered_people, _ = _filtered_people(query, sort_mode, history_commit)
+    filtered_names = [
+        person_name
+        for person in filtered_people
+        for person_name in [person.get("name")]
+        if isinstance(person_name, str) and person_name.strip()
+    ]
+
+    if not filtered_names:
+        flash("No people match the current filter; no tags were added.", "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                sort=sort_mode,
+                selected=selected_name,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
+
+    tag = normalized_tags[0]
+    updates = [{"name": name, "flags": [tag]} for name in filtered_names]
+
+    try:
+        _, updated_count = store.update_many(updates, base_commit=history_commit)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                sort=sort_mode,
+                selected=selected_name,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
+
+    flash(f"Added {tag} to {updated_count} people from the current list.", "success")
+    return redirect(
+        url_for(
+            "index",
+            q=query,
+            sort=sort_mode,
+            selected=selected_name,
+            dist_tags=dist_tags,
+            expertise_tags=expertise_tags,
+            expertise_add=expertise_add,
+        )
+    )
+
+
+@app.get("/api/distribution")
+def distribution_data() -> Any:
+    requested_history = request.args.get("history", "").strip()
+    tags_input = request.args.get("tags", "").strip()
+
+    try:
+        history_state = store.get_history_state(requested_history or None)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    active_commit = None if history_state["is_head"] else history_state["current_commit"]
+    distribution = _tagged_people_distribution(active_commit, tags_input)
+    return jsonify(distribution)
 
 
 @app.post("/person/create")
@@ -965,6 +1299,7 @@ def create_person() -> Any:
     new_country = request.form.get("country", "").strip()
     flags = request.form.get("flags", "").strip()
     query = request.form.get("q", "")
+    sort_mode = _normalize_sort_mode(request.form.get("sort", SORT_MODE_RANDOM))
     history_commit = request.form.get("history", "").strip() or None
     dist_tags = request.form.get("dist_tags", "#invite").strip()
     expertise_tags = request.form.get("expertise_tags", dist_tags).strip()
@@ -978,6 +1313,7 @@ def create_person() -> Any:
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 add_person=1,
                 history=history_commit,
                 dist_tags=dist_tags,
@@ -992,6 +1328,7 @@ def create_person() -> Any:
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 add_person=1,
                 history=history_commit,
                 dist_tags=dist_tags,
@@ -1007,6 +1344,7 @@ def create_person() -> Any:
                 url_for(
                     "index",
                     q=query,
+                    sort=sort_mode,
                     add_person=1,
                     history=history_commit,
                     dist_tags=dist_tags,
@@ -1028,6 +1366,7 @@ def create_person() -> Any:
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 add_person=1,
                 history=history_commit,
                 dist_tags=dist_tags,
@@ -1054,6 +1393,7 @@ def create_person() -> Any:
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 add_person=1,
                 history=history_commit,
                 dist_tags=dist_tags,
@@ -1068,6 +1408,7 @@ def create_person() -> Any:
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 add_person=1,
                 history=history_commit,
                 dist_tags=dist_tags,
@@ -1081,6 +1422,7 @@ def create_person() -> Any:
         url_for(
             "index",
             q=query,
+            sort=sort_mode,
             selected=created["name"],
             dist_tags=dist_tags,
             expertise_tags=expertise_tags,
@@ -1301,6 +1643,7 @@ def update_person() -> Any:
     new_country = request.form.get("country", "").strip()
     flags = request.form.get("flags", "").strip()
     query = request.form.get("q", "")
+    sort_mode = _normalize_sort_mode(request.form.get("sort", SORT_MODE_RANDOM))
     history_commit = request.form.get("history", "").strip() or None
     dist_tags = request.form.get("dist_tags", "#invite").strip()
     expertise_tags = request.form.get("expertise_tags", dist_tags).strip()
@@ -1309,11 +1652,14 @@ def update_person() -> Any:
     try:
         normalized_country = _normalize_country_code(new_country)
     except ValueError as exc:
+        if _request_wants_json():
+            return jsonify({"error": str(exc)}), 400
         flash(str(exc), "error")
         return redirect(
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 selected=original_name,
                 history=history_commit,
                 dist_tags=dist_tags,
@@ -1323,11 +1669,14 @@ def update_person() -> Any:
         )
 
     if not original_name:
+        if _request_wants_json():
+            return jsonify({"error": "Missing original person name."}), 400
         flash("Missing original person name.", "error")
         return redirect(
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 history=history_commit,
                 dist_tags=dist_tags,
                 expertise_tags=expertise_tags,
@@ -1337,11 +1686,14 @@ def update_person() -> Any:
 
     with _clean_lock:
         if _clean_status["running"]:
+            if _request_wants_json():
+                return jsonify({"error": "Cannot save: affiliation cleaning is in progress."}), 409
             flash("Cannot save: affiliation cleaning is in progress.", "error")
             return redirect(
                 url_for(
                     "index",
                     q=query,
+                    sort=sort_mode,
                     selected=original_name,
                     history=history_commit,
                     dist_tags=dist_tags,
@@ -1365,11 +1717,14 @@ def update_person() -> Any:
             base_commit=history_commit,
         )
     except ValueError as exc:
+        if _request_wants_json():
+            return jsonify({"error": str(exc)}), 400
         flash(str(exc), "error")
         return redirect(
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 selected=original_name,
                 history=history_commit,
                 dist_tags=dist_tags,
@@ -1378,11 +1733,23 @@ def update_person() -> Any:
             )
         )
 
+    if _request_wants_json():
+        return jsonify(
+            {
+                "message": "Person updated successfully.",
+                "person": updated,
+                "publication_display_counts": _publication_display_counts(updated),
+                "selected_name": updated["name"],
+                "history_is_head": True,
+            }
+        )
+
     flash("Person updated successfully.", "success")
     return redirect(
         url_for(
             "index",
             q=query,
+            sort=sort_mode,
             selected=updated["name"],
             dist_tags=dist_tags,
             expertise_tags=expertise_tags,
@@ -1395,6 +1762,7 @@ def update_person() -> Any:
 def clean_person() -> Any:
     original_name = request.form.get("original_name", "").strip()
     query = request.form.get("q", "")
+    sort_mode = _normalize_sort_mode(request.form.get("sort", SORT_MODE_RANDOM))
     history_commit = request.form.get("history", "").strip() or None
     dist_tags = request.form.get("dist_tags", "#invite").strip()
     expertise_tags = request.form.get("expertise_tags", dist_tags).strip()
@@ -1406,6 +1774,7 @@ def clean_person() -> Any:
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 history=history_commit,
                 dist_tags=dist_tags,
                 expertise_tags=expertise_tags,
@@ -1420,6 +1789,7 @@ def clean_person() -> Any:
                 url_for(
                     "index",
                     q=query,
+                    sort=sort_mode,
                     selected=original_name,
                     history=history_commit,
                     dist_tags=dist_tags,
@@ -1452,6 +1822,7 @@ def clean_person() -> Any:
         url_for(
             "index",
             q=query,
+            sort=sort_mode,
             selected=original_name,
             history=history_commit,
             dist_tags=dist_tags,
@@ -1481,6 +1852,7 @@ def llm_usage() -> str:
 def delete_person() -> Any:
     original_name = request.form.get("original_name", "").strip()
     query = request.form.get("q", "")
+    sort_mode = _normalize_sort_mode(request.form.get("sort", SORT_MODE_RANDOM))
     history_commit = request.form.get("history", "").strip() or None
     dist_tags = request.form.get("dist_tags", "#invite").strip()
     expertise_tags = request.form.get("expertise_tags", dist_tags).strip()
@@ -1492,6 +1864,7 @@ def delete_person() -> Any:
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 history=history_commit,
                 dist_tags=dist_tags,
                 expertise_tags=expertise_tags,
@@ -1506,6 +1879,7 @@ def delete_person() -> Any:
                 url_for(
                     "index",
                     q=query,
+                    sort=sort_mode,
                     selected=original_name,
                     history=history_commit,
                     dist_tags=dist_tags,
@@ -1525,6 +1899,7 @@ def delete_person() -> Any:
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 selected=original_name,
                 history=history_commit,
                 dist_tags=dist_tags,
@@ -1538,6 +1913,7 @@ def delete_person() -> Any:
         url_for(
             "index",
             q=query,
+            sort=sort_mode,
             dist_tags=dist_tags,
             expertise_tags=expertise_tags,
             expertise_add=expertise_add,
@@ -1549,6 +1925,7 @@ def delete_person() -> Any:
 def sync_person_publications() -> Any:
     original_name = request.form.get("original_name", "").strip()
     query = request.form.get("q", "")
+    sort_mode = _normalize_sort_mode(request.form.get("sort", SORT_MODE_RANDOM))
     history_commit = request.form.get("history", "").strip() or None
     dist_tags = request.form.get("dist_tags", "#invite").strip()
     expertise_tags = request.form.get("expertise_tags", dist_tags).strip()
@@ -1560,6 +1937,7 @@ def sync_person_publications() -> Any:
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 history=history_commit,
                 dist_tags=dist_tags,
                 expertise_tags=expertise_tags,
@@ -1574,6 +1952,7 @@ def sync_person_publications() -> Any:
                 url_for(
                     "index",
                     q=query,
+                    sort=sort_mode,
                     selected=original_name,
                     history=history_commit,
                     dist_tags=dist_tags,
@@ -1593,6 +1972,7 @@ def sync_person_publications() -> Any:
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 selected=original_name,
                 history=history_commit,
                 dist_tags=dist_tags,
@@ -1606,6 +1986,7 @@ def sync_person_publications() -> Any:
             url_for(
                 "index",
                 q=query,
+                sort=sort_mode,
                 selected=original_name,
                 history=history_commit,
                 dist_tags=dist_tags,
@@ -1625,6 +2006,7 @@ def sync_person_publications() -> Any:
         url_for(
             "index",
             q=query,
+            sort=sort_mode,
             selected=original_name,
             dist_tags=dist_tags,
             expertise_tags=expertise_tags,

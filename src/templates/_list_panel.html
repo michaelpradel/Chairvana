@@ -1,0 +1,120 @@
+<aside class="panel list-panel">
+  <div class="panel-header-row">
+    <h2>Search People</h2>
+    <a
+      href="{{ url_for('index', q=query, sort=sort_mode, history=history_commit, add_person=1, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
+      class="panel-action-btn"
+      title="Create a new person entry"
+    >Add person</a>
+  </div>
+  <p class="search-meta">{{ matched_people_count }} matching people</p>
+  <form method="get" action="{{ url_for('index') }}" class="search" id="peopleSearchForm">
+    {% if history_commit %}
+    <input type="hidden" name="history" value="{{ history_commit }}" />
+    {% endif %}
+    <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
+    <input type="hidden" name="expertise_tags" value="{{ expertise_tags }}" />
+    <input type="hidden" name="expertise_add" value="{{ expertise_add }}" />
+    <input type="hidden" name="sort" id="people_sort_mode" value="{{ sort_mode }}" />
+    <label for="q" title="Search by name, affiliation, country, flags, gender, or publication/PC membership count">
+      Search <span class="help-icon">?</span>
+    </label>
+    <input 
+      id="q" 
+      name="q" 
+      value="{{ query }}" 
+      placeholder="e.g., Germany t:testing pubs>5"
+      title="Supported filters: text, -#tag, male/female, gender:unknown, country:USA, affiliation:unknown, pubs>N, pcs>N, t:topic"
+    />
+    <div class="sort-controls" aria-label="Sort people list">
+      <span class="sort-controls-label">Sort</span>
+      <div class="sort-toggle" role="group" aria-label="Sort mode toggle">
+        <button type="button" class="sort-toggle-btn {% if sort_mode == 'random' %}active{% endif %}" data-sort-mode="random" aria-pressed="{{ 'true' if sort_mode == 'random' else 'false' }}">Random</button>
+        <button type="button" class="sort-toggle-btn {% if sort_mode == 'alpha' %}active{% endif %}" data-sort-mode="alpha" aria-pressed="{{ 'true' if sort_mode == 'alpha' else 'false' }}">A-Z</button>
+      </div>
+      <button type="submit">Filter</button>
+    </div>
+    <div class="search-help">
+      <details>
+        <summary>Search syntax help</summary>
+        <dl>
+          <dt>Text search</dt>
+          <dd>Matches name, affiliation, country, or flags. E.g., <code>CISPA</code>, <code>SGP</code>, <code>USA</code></dd>
+          <dt>Gender</dt>
+          <dd>Search by <code>male</code>, <code>female</code>, or <code>gender:unknown</code></dd>
+          <dt>Country</dt>
+          <dd>Search by <code>country:USA</code>, <code>country:DEU</code>, or <code>country:unknown</code></dd>
+          <dt>Affiliation</dt>
+          <dd>Filter people with missing affiliation using <code>affiliation:unknown</code></dd>
+          <dt>Publications</dt>
+          <dd>Filter by publication count: <code>pubs>5</code>, <code>pubs<=10</code>, <code>pubs=7</code></dd>
+          <dt>PC memberships</dt>
+          <dd>Filter by PC count: <code>pcs>3</code>, <code>pcs>=2</code>, <code>pcs<5</code></dd>
+          <dt>Tag absence</dt>
+          <dd>Exclude a tag with <code>-#invite</code> (or <code>-invite</code>), e.g., <code>pcs>7 -#invite</code></dd>
+          <dt>Combine filters</dt>
+          <dd>Multiple filters with AND logic: <code>male pubs>5 pcs>=2</code></dd>
+          <dt>Topic match (embeddings)</dt>
+          <dd>Semantic search via <code>t:quantum</code> or <code>t:"compiler testing"</code>; combine with other filters like <code>China t:"compiler testing"</code></dd>
+        </dl>
+      </details>
+    </div>
+  </form>
+
+  <form method="post" action="{{ url_for('add_tag_to_filtered_people') }}" class="bulk-tag-form">
+    <input type="hidden" name="q" value="{{ query }}" />
+    <input type="hidden" name="sort" value="{{ sort_mode }}" />
+    <input type="hidden" name="history" value="{{ history_commit or '' }}" />
+    <input type="hidden" name="selected" value="{{ selected_person['name'] if selected_person else '' }}" />
+    <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
+    <input type="hidden" name="expertise_tags" value="{{ expertise_tags }}" />
+    <input type="hidden" name="expertise_add" value="{{ expertise_add }}" />
+
+    <label for="bulk_tag">Bulk add one tag to current list</label>
+    <div class="bulk-tag-row">
+      <input
+        id="bulk_tag"
+        name="bulk_tag"
+        placeholder="#invite"
+        title="Adds this tag to all currently listed people"
+        {% if clean_running or not people %}disabled{% endif %}
+      />
+      <button type="submit" {% if clean_running or not people %}disabled{% endif %}>Add to {{ matched_people_count }}</button>
+    </div>
+  </form>
+
+  <ul class="person-list">
+    {% for person in people %}
+    <li>
+      <a
+        href="{{ url_for('index', q=query, sort=sort_mode, selected=person['name'], history=history_commit, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
+        class="person-link {% if selected_person and selected_person['name'] == person['name'] %}active{% endif %}"
+        {% if person.get('_topic_font_alpha') %}
+        style="color: rgba(31, 31, 25, {{ person.get('_topic_font_alpha') }});"
+        {% endif %}
+        {% if person.get('_topic_tooltip') %}
+        title="{{ person.get('_topic_tooltip') }}"
+        {% endif %}
+      >
+        <strong>{{ person['name'] }}</strong>
+        <span>{{ person.get('affiliation') or 'Unknown affiliation' }}</span>
+        <span class="person-meta-inline">
+          {{ person.get('gender', 'unknown') }}
+          {% if person.get('country') %}
+          · {{ person.get('country') }}
+          {% endif %}
+          {% if person.get('_topic_similarity') is not none %}
+          · sim {{ '%.3f'|format(person.get('_topic_similarity', 0.0)) }}
+          {% endif %}
+        </span>
+        <span class="person-summary-inline">
+          {{ person.get('_publication_count', 0) }} publications · {{ person.get('_prior_pc_count', 0) }} prior PCs
+        </span>
+      </a>
+    </li>
+    {% endfor %}
+    {% if not people %}
+    <li class="empty">No people match your search.</li>
+    {% endif %}
+  </ul>
+</aside>

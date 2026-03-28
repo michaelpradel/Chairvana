@@ -253,8 +253,8 @@ class DblpQueryEngine:
     @staticmethod
     def _canonical_author_name(author_name: str) -> str:
         normalized = normalize_whitespace(author_name)
-        # DBLP sometimes appends disambiguation suffixes like "0001".
-        return re.sub(r"\s\d{4}$", "", normalized)
+        # DBLP may append numeric disambiguation suffixes (e.g., "0001", "0114").
+        return re.sub(r"\s\d+$", "", normalized)
 
     @staticmethod
     def _publication_identity(publication: Publication) -> tuple[Any, ...]:

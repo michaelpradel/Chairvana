@@ -26,7 +26,7 @@
           <div class="history-controls" aria-label="people history navigation">
             {% if older_history_commit and not clean_running %}
             <a
-              href="{{ url_for('index', q=query, selected=selected_name, history=older_history_commit, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
+              href="{{ url_for('index', q=query, sort=sort_mode, selected=selected_name, history=older_history_commit, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
               class="history-btn"
               title="Show the previous committed version of people.jsonl"
             >&larr; Older</a>
@@ -44,7 +44,7 @@
 
             {% if newer_history_commit and not clean_running %}
             <a
-              href="{{ url_for('index', q=query, selected=selected_name, history=newer_history_commit, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
+              href="{{ url_for('index', q=query, sort=sort_mode, selected=selected_name, history=newer_history_commit, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
               class="history-btn"
               title="Show the next committed version of people.jsonl"
             >Newer &rarr;</a>
@@ -52,7 +52,7 @@
             <span class="history-btn disabled">Newer &rarr;</span>
             {% endif %}
           </div>
-          <a href="{{ url_for('index', dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}" class="reload-btn" title="Reload from store">&#8635; Reload</a>
+          <a href="{{ url_for('index', sort=sort_mode, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}" class="reload-btn" title="Reload from store">&#8635; Reload</a>
         </div>
       </header>
 
@@ -68,91 +68,7 @@
 
       <section class="content">
         <div class="left-column">
-        <aside class="panel list-panel">
-          <div class="panel-header-row">
-            <h2>Search People</h2>
-            <a
-              href="{{ url_for('index', q=query, history=history_commit, add_person=1, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
-              class="panel-action-btn"
-              title="Create a new person entry"
-            >Add person</a>
-          </div>
-          <p class="search-meta">{{ matched_people_count }} matching people</p>
-          <form method="get" action="{{ url_for('index') }}" class="search" id="peopleSearchForm">
-            {% if history_commit %}
-            <input type="hidden" name="history" value="{{ history_commit }}" />
-            {% endif %}
-            <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
-            <input type="hidden" name="expertise_tags" value="{{ expertise_tags }}" />
-            <input type="hidden" name="expertise_add" value="{{ expertise_add }}" />
-            <label for="q" title="Search by name, affiliation, country, flags, gender, or publication/PC membership count">
-              Search <span class="help-icon">?</span>
-            </label>
-            <input 
-              id="q" 
-              name="q" 
-              value="{{ query }}" 
-              placeholder="e.g., Germany t:testing pubs>5"
-              title="Supported filters: text, male/female, gender:unknown, country:USA, affiliation:unknown, pubs>N, pcs>N, t:topic"
-            />
-            <button type="submit">Filter</button>
-            <div class="search-help">
-              <details>
-                <summary>Search syntax help</summary>
-                <dl>
-                  <dt>Text search</dt>
-                  <dd>Matches name, affiliation, country, or flags. E.g., <code>CISPA</code>, <code>SGP</code>, <code>USA</code></dd>
-                  <dt>Gender</dt>
-                  <dd>Search by <code>male</code>, <code>female</code>, or <code>gender:unknown</code></dd>
-                  <dt>Country</dt>
-                  <dd>Search by <code>country:USA</code>, <code>country:DEU</code>, or <code>country:unknown</code></dd>
-                  <dt>Affiliation</dt>
-                  <dd>Filter people with missing affiliation using <code>affiliation:unknown</code></dd>
-                  <dt>Publications</dt>
-                  <dd>Filter by publication count: <code>pubs>5</code>, <code>pubs<=10</code>, <code>pubs=7</code></dd>
-                  <dt>PC memberships</dt>
-                  <dd>Filter by PC count: <code>pcs>3</code>, <code>pcs>=2</code>, <code>pcs<5</code></dd>
-                  <dt>Combine filters</dt>
-                  <dd>Multiple filters with AND logic: <code>male pubs>5 pcs>=2</code></dd>
-                  <dt>Topic match (embeddings)</dt>
-                  <dd>Semantic search via <code>t:quantum</code> or <code>t:"compiler testing"</code>; combine with other filters like <code>China t:"compiler testing"</code></dd>
-                </dl>
-              </details>
-            </div>
-          </form>
-
-          <ul class="person-list">
-            {% for person in people %}
-            <li>
-              <a
-                href="{{ url_for('index', q=query, selected=person['name'], history=history_commit, dist_tags=distribution.input, expertise_tags=expertise_tags, expertise_add=expertise_add) }}"
-                class="person-link {% if selected_person and selected_person['name'] == person['name'] %}active{% endif %}"
-                {% if person.get('_topic_font_alpha') %}
-                style="color: rgba(31, 31, 25, {{ person.get('_topic_font_alpha') }});"
-                {% endif %}
-                {% if person.get('_topic_tooltip') %}
-                title="{{ person.get('_topic_tooltip') }}"
-                {% endif %}
-              >
-                <strong>{{ person['name'] }}</strong>
-                <span>{{ person.get('affiliation') or 'Unknown affiliation' }}</span>
-                <span class="person-meta-inline">
-                  {{ person.get('gender', 'unknown') }}
-                  {% if person.get('country') %}
-                  · {{ person.get('country') }}
-                  {% endif %}
-                  {% if person.get('_topic_similarity') is not none %}
-                  · sim {{ '%.3f'|format(person.get('_topic_similarity', 0.0)) }}
-                  {% endif %}
-                </span>
-              </a>
-            </li>
-            {% endfor %}
-            {% if not people %}
-            <li class="empty">No people match your search.</li>
-            {% endif %}
-          </ul>
-        </aside>
+        {% include '_list_panel.html' %}
 
         <section class="panel expertise-panel" aria-label="Expertise map">
           <h2>Expertise</h2>
@@ -161,6 +77,7 @@
             <input type="hidden" name="history" value="{{ history_commit }}" />
             {% endif %}
             <input type="hidden" name="q" value="{{ query }}" />
+            <input type="hidden" name="sort" value="{{ sort_mode }}" />
             <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
             {% if selected_person %}
             <input type="hidden" name="selected" value="{{ selected_person['name'] }}" />
@@ -189,138 +106,7 @@
         </div>
 
         <div class="right-column">
-          <section class="panel edit-panel">
-            {% if selected_person or add_person_mode %}
-            {% set editor_person = selected_person if selected_person else {} %}
-            <h2>Edit Person</h2>
-            {% if add_person_mode %}
-            <div class="history-notice">Creating a new person entry. Name must be unique.</div>
-            {% endif %}
-            {% if not history_is_head and history_entry %}
-            <div class="history-notice">
-              Viewing snapshot {{ history_entry.short_commit }}. Saving from this view will discard newer `people.jsonl` commits and replace them with a new commit.
-            </div>
-            {% endif %}
-            {% if clean_running %}
-            <div class="clean-status running" id="clean-banner">
-              <span class="spinner"></span>
-              Cleaning affiliation data&hellip; other edits are disabled.
-            </div>
-            {% endif %}
-            <form method="post" action="{{ url_for('create_person') if add_person_mode else url_for('update_person') }}" class="editor{{ ' is-locked' if clean_running else '' }}">
-              {% if not add_person_mode %}
-              <input type="hidden" name="original_name" value="{{ selected_person['name'] }}" />
-              {% endif %}
-              <input type="hidden" name="q" value="{{ query }}" />
-              <input type="hidden" name="history" value="{{ history_commit or '' }}" />
-              <input type="hidden" name="dist_tags" value="{{ distribution.input }}" />
-              <input type="hidden" name="expertise_tags" value="{{ expertise_tags }}" />
-              <input type="hidden" name="expertise_add" value="{{ expertise_add }}" />
-
-              <label for="name">Name</label>
-              <input id="name" name="name" value="{{ editor_person.get('name', '') }}" required />
-
-              <label for="affiliation">Affiliation</label>
-              <input
-                id="affiliation"
-                name="affiliation"
-                value="{{ editor_person.get('affiliation', '') }}"
-              />
-
-              <label for="homepage">Homepage</label>
-              <input
-                id="homepage"
-                name="homepage"
-                value="{{ editor_person.get('homepage', '') }}"
-                placeholder="https://example.edu/~person"
-              />
-              {% if editor_person.get('homepage') %}
-              <div class="field-note">
-                Current: <a href="{{ editor_person.get('homepage') }}" target="_blank" rel="noopener noreferrer">{{ editor_person.get('homepage') }}</a>
-              </div>
-              {% endif %}
-
-              <label for="gender">Gender</label>
-              <input
-                id="gender"
-                name="gender"
-                value="{{ editor_person.get('gender', '') }}"
-                placeholder="female, male, unknown"
-              />
-
-              <label for="country">Country</label>
-              <input
-                id="country"
-                name="country"
-                value="{{ editor_person.get('country', '') }}"
-                placeholder="USA, DEU, SGP"
-                maxlength="3"
-                minlength="3"
-                pattern="[A-Za-z]{3}"
-                title="Use a 3-letter country code like DEU"
-                oninput="this.value = this.value.toUpperCase()"
-              />
-
-              <label for="flags">Flags (space or comma separated)</label>
-              <input
-                id="flags"
-                name="flags"
-                value="{{ editor_person.get('flags', []) | join(' ') }}"
-                placeholder="#invite #redflag"
-              />
-              {% if top_common_tags %}
-              <div class="quick-tags" aria-label="Common tags from current search results">
-                <span class="quick-tags-label">Common tags</span>
-                <div class="quick-tags-buttons">
-                  {% for tag in top_common_tags %}
-                  <button type="button" class="quick-tag-btn" data-tag="{{ tag }}">{{ tag }}</button>
-                  {% endfor %}
-                </div>
-              </div>
-              {% endif %}
-
-              {% if not add_person_mode %}
-              <dl class="details">
-                <dt>PC memberships</dt>
-                <dd>
-                  {% if editor_person.get('pc_memberships') %}
-                  {% for m in editor_person.get('pc_memberships', []) %}
-                  <span class="tag">{{ m.get('conference', '?') }} {{ m.get('year', '?') }}</span>
-                  {% endfor %}
-                  {% else %}
-                  None
-                  {% endif %}
-                </dd>
-                <dt>Publications</dt>
-                <dd>
-                  {% set pub_summary = editor_person.get('publication_summary') %}
-                  {% if publication_display_counts %}
-                  {% for venue_label, count in publication_display_counts %}
-                  <span class="tag">{{ venue_label }}: {{ count }}</span>
-                  {% endfor %}
-                  <span class="tag-secondary">Total: {{ pub_summary.get('total', 0) }}{% if pub_summary.get('year_range') %} ({{ pub_summary['year_range'][0] }}–{{ pub_summary['year_range'][1] }}){% endif %}</span>
-                  {% else %}
-                  None
-                  {% endif %}
-                </dd>
-              </dl>
-              {% endif %}
-
-              <div class="form-actions">
-                {% if not add_person_mode %}
-                <button type="button" class="show-expertise-btn secondary" data-person-name="{{ selected_person['name'] }}" title="Add {{ selected_person['name'] }} to the expertise chart">Show expertise</button>
-                <button type="submit" formaction="{{ url_for('sync_person_publications') }}" class="secondary"{% if clean_running %} disabled{% endif %} title="Auto-complete publication summary from DBLP for {{ selected_person['name'] }}">Auto-complete publications</button>
-                {% endif %}
-                <button type="submit" class="primary"{% if clean_running %} disabled{% endif %}>{{ 'Add person' if add_person_mode else 'Save changes' }}</button>
-                {% if not add_person_mode %}
-                <button type="submit" formaction="{{ url_for('delete_person') }}" class="danger"{% if clean_running %} disabled{% endif %} onclick="return confirm('Are you sure you want to delete {{ selected_person['name'] | escape }}? This cannot be undone.');">Delete person</button>
-                {% endif %}
-              </div>
-            </form>
-            {% else %}
-            <p>Select a person to edit.</p>
-            {% endif %}
-          </section>
+          {% include '_edit_panel.html' %}
 
           <section class="panel distribution-panel" aria-label="Tag distribution tools">
             <h2>Distribution</h2>
@@ -329,6 +115,7 @@
               <input type="hidden" name="history" value="{{ history_commit }}" />
               {% endif %}
               <input type="hidden" name="q" value="{{ query }}" />
+              <input type="hidden" name="sort" value="{{ sort_mode }}" />
               {% if selected_person %}
               <input type="hidden" name="selected" value="{{ selected_person['name'] }}" />
               {% endif %}
@@ -340,106 +127,31 @@
             </form>
 
             <section class="distribution" aria-label="Gender and country distribution for selected tags">
-              <p class="distribution-meta">
-                {{ distribution.matched_count }}
-                {% if distribution.selected_tags %}
-                people with
-                {% for tag in distribution.selected_tags %}
-                <span class="tag">{{ tag }}</span>
-                {% endfor %}
-                {% else %}
-                people (all)
-                {% endif %}
-              </p>
+              <p class="distribution-meta" id="distributionMeta">Loading distribution...</p>
               <p class="chart-hint">Click a segment or legend item to run the same filter in Search People.</p>
 
               <div class="chart-wrap">
                 <h4>Gender</h4>
-                {% if distribution.gender %}
-                <div class="gender-chart-container">
-                  <div class="gender-bar" id="genderBar">
-                    {% set gender_total = distribution.gender.values() | sum %}
-                    {% set male_count = distribution.gender.get('male', 0) %}
-                    {% set female_count = distribution.gender.get('female', 0) %}
-                    {% set unknown_count = distribution.gender.get('unknown', 0) %}
-                    {% set male_pct = (male_count / gender_total * 100) if gender_total else 0 %}
-                    {% set female_pct = (female_count / gender_total * 100) if gender_total else 0 %}
-                    {% set unknown_pct = (unknown_count / gender_total * 100) if gender_total else 0 %}
-                    <button type="button" class="gender-segment male chart-search-trigger" data-search-query="male" style="width: {{ male_pct }}%" title="Show all male people ({{ male_count }})" aria-label="Show all male people"{% if not male_count %} disabled{% endif %}></button>
-                    <button type="button" class="gender-segment female chart-search-trigger" data-search-query="female" style="width: {{ female_pct }}%" title="Show all female people ({{ female_count }})" aria-label="Show all female people"{% if not female_count %} disabled{% endif %}></button>
-                    <button type="button" class="gender-segment unknown chart-search-trigger" data-search-query="gender:unknown" style="width: {{ unknown_pct }}%" title="Show all people with unknown gender ({{ unknown_count }})" aria-label="Show all people with unknown gender"{% if not unknown_count %} disabled{% endif %}></button>
-                  </div>
-                  <div class="gender-legend">
-                    <button type="button" class="legend-item chart-search-trigger" data-search-query="male"{% if not male_count %} disabled{% endif %}><span class="legend-color male"></span> Male ({{ male_count }})</button>
-                    <button type="button" class="legend-item chart-search-trigger" data-search-query="female"{% if not female_count %} disabled{% endif %}><span class="legend-color female"></span> Female ({{ female_count }})</button>
-                    <button type="button" class="legend-item chart-search-trigger" data-search-query="gender:unknown"{% if not unknown_count %} disabled{% endif %}><span class="legend-color unknown"></span> Unknown ({{ unknown_count }})</button>
-                  </div>
-                </div>
-                {% else %}
-                <p class="empty">No matching records.</p>
-                {% endif %}
+                <div id="genderDistributionContainer" class="gender-chart-container" hidden></div>
+                <p class="empty" id="genderDistributionEmpty" hidden>No matching records.</p>
               </div>
 
-              <div class="chart-wrap">
-                <h4>Country (top 12)</h4>
-                {% if distribution.country %}
-                <div class="country-chart-container">
-                  <canvas id="countryChart" style="max-height: 300px;"></canvas>
+              <div class="distribution-pie-grid">
+                <div class="chart-wrap">
+                  <h4>Country (top 12)</h4>
+                  <div class="country-chart-container" id="countryDistributionContainer" hidden>
+                    <canvas id="countryChart" style="max-height: 300px;"></canvas>
+                  </div>
+                  <p class="empty" id="countryDistributionEmpty" hidden>No matching records.</p>
                 </div>
-                <script>
-                  (function() {
-                    var countryData = {{ distribution.country | tojson }};
-                    var labels = Object.keys(countryData);
-                    var values = Object.values(countryData);
-                    
-                    var colors = [
-                      '#0e6a61', '#1a8e7e', '#29b5a0', '#3dc9bd', '#52d9ce',
-                      '#70e5d8', '#8beee4', '#a7f5ef', '#c9ebe6', '#d9f2f0',
-                      '#e6f8f6', '#f0fbf9'
-                    ];
-                    
-                    var ctx = document.getElementById('countryChart').getContext('2d');
-                    new Chart(ctx, {
-                      type: 'doughnut',
-                      data: {
-                        labels: labels,
-                        datasets: [{
-                          data: values,
-                          backgroundColor: colors.slice(0, labels.length),
-                          borderColor: '#f6f1e9',
-                          borderWidth: 2
-                        }]
-                      },
-                      options: {
-                        responsive: true,
-                        maintainAspectRatio: true,
-                        onClick: function(_, elements) {
-                          if (!elements.length || typeof window.applyDistributionSearch !== 'function') {
-                            return;
-                          }
-                          var clickedLabel = labels[elements[0].index];
-                          var countryQuery = clickedLabel === 'UNKNOWN' ? 'country:unknown' : 'country:' + clickedLabel;
-                          window.applyDistributionSearch(countryQuery);
-                        },
-                        plugins: {
-                          legend: {
-                            position: 'right',
-                            labels: {
-                              font: { family: '"Chivo", sans-serif', size: 12 },
-                              padding: 12,
-                              color: '#1f1f19',
-                              usePointStyle: true,
-                              pointStyle: 'circle'
-                            }
-                          }
-                        }
-                      }
-                    });
-                  })();
-                </script>
-                {% else %}
-                <p class="empty">No matching records.</p>
-                {% endif %}
+
+                <div class="chart-wrap">
+                  <h4>Global Region</h4>
+                  <div class="country-chart-container" id="regionDistributionContainer" hidden>
+                    <canvas id="regionChart" style="max-height: 300px;"></canvas>
+                  </div>
+                  <p class="empty" id="regionDistributionEmpty" hidden>No matching records.</p>
+                </div>
               </div>
             </section>
           </section>
@@ -520,20 +232,295 @@
       }
     };
 
-    document.querySelectorAll('.chart-search-trigger').forEach(function (element) {
-      element.addEventListener('click', function () {
-        var nextQuery = element.getAttribute('data-search-query');
-        window.applyDistributionSearch(nextQuery);
-      });
+    document.addEventListener('click', function (event) {
+      var trigger = event.target.closest('.chart-search-trigger');
+      if (!trigger) {
+        return;
+      }
+      var nextQuery = trigger.getAttribute('data-search-query');
+      window.applyDistributionSearch(nextQuery);
     });
   }());
 
   (function () {
-    var flagsInput = document.getElementById('flags');
-    if (!flagsInput) {
+    var panelsRequestInFlight = false;
+
+    function replacePanel(selector, html) {
+      var current = document.querySelector(selector);
+      if (!current || !html) {
+        return;
+      }
+
+      var wrapper = document.createElement('div');
+      wrapper.innerHTML = String(html).trim();
+      var next = wrapper.firstElementChild;
+      if (!next) {
+        return;
+      }
+      current.replaceWith(next);
+    }
+
+    function loadPanelsFromUrl(targetUrl, preserveScroll) {
+      if (panelsRequestInFlight) {
+        return;
+      }
+      panelsRequestInFlight = true;
+
+      var nextUrl = new URL(targetUrl, window.location.origin);
+      var apiUrl = new URL('/api/panels', window.location.origin);
+      apiUrl.search = nextUrl.search;
+
+      var personList = document.querySelector('.person-list');
+      var previousScrollTop = personList ? personList.scrollTop : 0;
+
+      fetch(apiUrl.toString(), {
+        headers: {
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        }
+      })
+        .then(function (response) {
+          return response.json().then(function (payload) {
+            if (!response.ok) {
+              var errorMessage = payload && payload.error ? payload.error : 'Failed to update panel.';
+              throw new Error(errorMessage);
+            }
+            return payload;
+          });
+        })
+        .then(function (payload) {
+          replacePanel('.list-panel', payload.list_html);
+          replacePanel('.edit-panel', payload.edit_html);
+
+          if (preserveScroll) {
+            var nextPersonList = document.querySelector('.person-list');
+            if (nextPersonList) {
+              nextPersonList.scrollTop = previousScrollTop;
+            }
+          }
+
+          window.history.pushState({}, '', nextUrl.pathname + nextUrl.search);
+        })
+        .catch(function () {
+          window.location.assign(nextUrl.pathname + nextUrl.search);
+        })
+        .finally(function () {
+          panelsRequestInFlight = false;
+        });
+    }
+
+    document.addEventListener('submit', function (event) {
+      var form = event.target;
+      if (!(form instanceof HTMLFormElement) || form.id !== 'peopleSearchForm') {
+        return;
+      }
+
+      event.preventDefault();
+      var formData = new FormData(form);
+      var query = new URLSearchParams(formData);
+      loadPanelsFromUrl((form.getAttribute('action') || '/') + '?' + query.toString(), false);
+    });
+
+    document.addEventListener('click', function (event) {
+      var personLink = event.target.closest('.person-link');
+      if (!personLink) {
+        return;
+      }
+      event.preventDefault();
+      loadPanelsFromUrl(personLink.href, true);
+    });
+
+    window.addEventListener('popstate', function () {
+      window.location.reload();
+    });
+  }());
+
+  (function () {
+    if (typeof Chart === 'undefined') {
       return;
     }
 
+    var historyCommit = {{ history_commit | tojson }};
+    var distributionTags = {{ distribution.input | tojson }};
+    var distributionMeta = document.getElementById('distributionMeta');
+
+    var genderContainer = document.getElementById('genderDistributionContainer');
+    var genderEmpty = document.getElementById('genderDistributionEmpty');
+
+    var countryContainer = document.getElementById('countryDistributionContainer');
+    var countryEmpty = document.getElementById('countryDistributionEmpty');
+    var countryCanvas = document.getElementById('countryChart');
+
+    var regionContainer = document.getElementById('regionDistributionContainer');
+    var regionEmpty = document.getElementById('regionDistributionEmpty');
+    var regionCanvas = document.getElementById('regionChart');
+
+    if (!distributionMeta || !genderContainer || !genderEmpty || !countryContainer || !countryEmpty || !countryCanvas || !regionContainer || !regionEmpty || !regionCanvas) {
+      return;
+    }
+
+    var countryChartInstance = null;
+    var regionChartInstance = null;
+
+    function tagsText(selectedTags) {
+      if (!Array.isArray(selectedTags) || !selectedTags.length) {
+        return 'people (all)';
+      }
+
+      var normalizedTags = selectedTags.map(function (tag) { return String(tag); }).join(' ');
+      return 'people with ' + normalizedTags;
+    }
+
+    function renderGender(genderData) {
+      var maleCount = Number(genderData.male || 0);
+      var femaleCount = Number(genderData.female || 0);
+      var unknownCount = Number(genderData.unknown || 0);
+      var total = maleCount + femaleCount + unknownCount;
+
+      if (!total) {
+        genderContainer.hidden = true;
+        genderEmpty.hidden = false;
+        genderContainer.innerHTML = '';
+        return;
+      }
+
+      var malePct = (maleCount / total) * 100;
+      var femalePct = (femaleCount / total) * 100;
+      var unknownPct = (unknownCount / total) * 100;
+
+      genderContainer.innerHTML = '' +
+        '<div class="gender-bar">' +
+          '<button type="button" class="gender-segment male chart-search-trigger" data-search-query="male" style="width:' + malePct + '%" title="Show all male people (' + maleCount + ')" aria-label="Show all male people"' + (maleCount ? '' : ' disabled') + '></button>' +
+          '<button type="button" class="gender-segment female chart-search-trigger" data-search-query="female" style="width:' + femalePct + '%" title="Show all female people (' + femaleCount + ')" aria-label="Show all female people"' + (femaleCount ? '' : ' disabled') + '></button>' +
+          '<button type="button" class="gender-segment unknown chart-search-trigger" data-search-query="gender:unknown" style="width:' + unknownPct + '%" title="Show all people with unknown gender (' + unknownCount + ')" aria-label="Show all people with unknown gender"' + (unknownCount ? '' : ' disabled') + '></button>' +
+        '</div>' +
+        '<div class="gender-legend">' +
+          '<button type="button" class="legend-item chart-search-trigger" data-search-query="male"' + (maleCount ? '' : ' disabled') + '><span class="legend-color male"></span> Male (' + maleCount + ')</button>' +
+          '<button type="button" class="legend-item chart-search-trigger" data-search-query="female"' + (femaleCount ? '' : ' disabled') + '><span class="legend-color female"></span> Female (' + femaleCount + ')</button>' +
+          '<button type="button" class="legend-item chart-search-trigger" data-search-query="gender:unknown"' + (unknownCount ? '' : ' disabled') + '><span class="legend-color unknown"></span> Unknown (' + unknownCount + ')</button>' +
+        '</div>';
+
+      genderContainer.hidden = false;
+      genderEmpty.hidden = true;
+    }
+
+    function renderPieChart(chartInstance, canvas, container, emptyMessage, data, colors, onSliceClick) {
+      var labels = Object.keys(data || {});
+      var values = Object.values(data || {});
+
+      if (!labels.length) {
+        container.hidden = true;
+        emptyMessage.hidden = false;
+        if (chartInstance) {
+          chartInstance.destroy();
+        }
+        return null;
+      }
+
+      emptyMessage.hidden = true;
+      container.hidden = false;
+
+      if (chartInstance) {
+        chartInstance.destroy();
+      }
+
+      return new Chart(canvas.getContext('2d'), {
+        type: 'doughnut',
+        data: {
+          labels: labels,
+          datasets: [{
+            data: values,
+            backgroundColor: colors.slice(0, labels.length),
+            borderColor: '#f6f1e9',
+            borderWidth: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          onClick: function (_, elements) {
+            if (!elements.length || typeof onSliceClick !== 'function') {
+              return;
+            }
+            onSliceClick(labels[elements[0].index]);
+          },
+          plugins: {
+            legend: {
+              position: 'bottom',
+              labels: {
+                font: { family: '"Chivo", sans-serif', size: 12 },
+                padding: 12,
+                color: '#1f1f19',
+                usePointStyle: true,
+                pointStyle: 'circle'
+              }
+            }
+          }
+        }
+      });
+    }
+
+    function loadDistribution() {
+      distributionMeta.textContent = 'Loading distribution...';
+
+      var params = new URLSearchParams();
+      if (historyCommit) {
+        params.set('history', historyCommit);
+      }
+      params.set('tags', distributionTags || '');
+
+      fetch('/api/distribution?' + params.toString())
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error('Failed to load distribution');
+          }
+          return response.json();
+        })
+        .then(function (payload) {
+          distributionMeta.textContent = String(payload.matched_count || 0) + ' ' + tagsText(payload.selected_tags || []);
+
+          renderGender(payload.gender || {});
+
+          countryChartInstance = renderPieChart(
+            countryChartInstance,
+            countryCanvas,
+            countryContainer,
+            countryEmpty,
+            payload.country || {},
+            ['#0e6a61', '#1a8e7e', '#29b5a0', '#3dc9bd', '#52d9ce', '#70e5d8', '#8beee4', '#a7f5ef', '#c9ebe6', '#d9f2f0', '#e6f8f6', '#f0fbf9'],
+            function (label) {
+              if (typeof window.applyDistributionSearch !== 'function') {
+                return;
+              }
+              window.applyDistributionSearch(label === 'UNKNOWN' ? 'country:unknown' : 'country:' + label);
+            }
+          );
+
+          regionChartInstance = renderPieChart(
+            regionChartInstance,
+            regionCanvas,
+            regionContainer,
+            regionEmpty,
+            payload.region || {},
+            ['#1b4d96', '#2a7f62', '#b15e1d', '#6b3f8f', '#9f2f45'],
+            null
+          );
+        })
+        .catch(function () {
+          distributionMeta.textContent = 'Failed to load distribution.';
+          genderContainer.hidden = true;
+          genderEmpty.hidden = false;
+          countryContainer.hidden = true;
+          countryEmpty.hidden = false;
+          regionContainer.hidden = true;
+          regionEmpty.hidden = false;
+        });
+    }
+
+    loadDistribution();
+  }());
+
+  (function () {
     function normalizeTagToken(rawToken) {
       var token = String(rawToken || '').trim().toLowerCase();
       if (!token) {
@@ -542,27 +529,35 @@
       return token.charAt(0) === '#' ? token : ('#' + token);
     }
 
-    document.querySelectorAll('.quick-tag-btn').forEach(function (buttonEl) {
-      buttonEl.addEventListener('click', function () {
-        var tag = normalizeTagToken(buttonEl.getAttribute('data-tag'));
-        if (!tag) {
-          return;
-        }
+    document.addEventListener('click', function (event) {
+      var buttonEl = event.target.closest('.quick-tag-btn');
+      if (!buttonEl) {
+        return;
+      }
 
-        var existingTokens = String(flagsInput.value || '')
-          .replace(/,/g, ' ')
-          .split(/\s+/)
-          .map(normalizeTagToken)
-          .filter(Boolean);
+      var flagsInput = document.getElementById('flags');
+      if (!flagsInput) {
+        return;
+      }
 
-        if (existingTokens.includes(tag)) {
-          return;
-        }
+      var tag = normalizeTagToken(buttonEl.getAttribute('data-tag'));
+      if (!tag) {
+        return;
+      }
 
-        var currentValue = String(flagsInput.value || '').trim();
-        flagsInput.value = currentValue ? (currentValue + ' ' + tag) : tag;
-        flagsInput.focus();
-      });
+      var existingTokens = String(flagsInput.value || '')
+        .replace(/,/g, ' ')
+        .split(/\s+/)
+        .map(normalizeTagToken)
+        .filter(Boolean);
+
+      if (existingTokens.includes(tag)) {
+        return;
+      }
+
+      var currentValue = String(flagsInput.value || '').trim();
+      flagsInput.value = currentValue ? (currentValue + ' ' + tag) : tag;
+      flagsInput.focus();
     });
   }());
 
@@ -576,6 +571,7 @@
     var distTags = {{ distribution.input | tojson }};
     var expertiseTags = {{ expertise_tags | tojson }};
     var expertiseAdd = {{ expertise_add | tojson }};
+    var sortMode = {{ sort_mode | tojson }};
     var bannerEl = document.getElementById('clean-banner');
     var editorEl = document.querySelector('.editor');
 
@@ -598,6 +594,7 @@
         setTimeout(function () {
           window.location.assign(
             '/?q=' + encodeURIComponent(query || '') +
+            '&sort=' + encodeURIComponent(sortMode || 'random') +
             '&selected=' + encodeURIComponent(resultName || '') +
             '&dist_tags=' + encodeURIComponent(distTags || '') +
             '&expertise_tags=' + encodeURIComponent(expertiseTags || '') +
@@ -622,6 +619,236 @@
     }
 
     setTimeout(poll, 2000);
+  }());
+
+  (function () {
+    document.addEventListener('click', function (event) {
+      var buttonEl = event.target.closest('.sort-toggle-btn[data-sort-mode]');
+      if (!buttonEl) {
+        return;
+      }
+
+      var searchForm = document.getElementById('peopleSearchForm');
+      var sortInput = document.getElementById('people_sort_mode');
+      if (!searchForm || !sortInput) {
+        return;
+      }
+
+      var nextSortMode = buttonEl.getAttribute('data-sort-mode');
+      if (!nextSortMode || nextSortMode === sortInput.value) {
+        return;
+      }
+
+      sortInput.value = nextSortMode;
+      if (typeof searchForm.requestSubmit === 'function') {
+        searchForm.requestSubmit();
+      } else {
+        searchForm.submit();
+      }
+    });
+  }());
+
+  (function () {
+    var peopleList = document.querySelector('.person-list');
+    if (!peopleList) {
+      return;
+    }
+
+    var scrollKey = 'chairvana.peopleList.scrollTop';
+    var rawSavedValue = sessionStorage.getItem(scrollKey);
+    if (rawSavedValue !== null) {
+      var savedScrollTop = Number(rawSavedValue);
+      if (Number.isFinite(savedScrollTop) && savedScrollTop >= 0) {
+        peopleList.scrollTop = savedScrollTop;
+      }
+      sessionStorage.removeItem(scrollKey);
+    }
+
+    document.querySelectorAll('.person-link').forEach(function (personLink) {
+      personLink.addEventListener('click', function () {
+        sessionStorage.setItem(scrollKey, String(peopleList.scrollTop));
+      });
+    });
+  }());
+
+  (function () {
+
+    function setBanner(saveBanner, type, message) {
+      saveBanner.className = 'clean-status ' + type;
+      saveBanner.textContent = message;
+      saveBanner.hidden = false;
+    }
+
+    function updateSelectedInputs(editorForm, nextName) {
+      document.querySelectorAll('input[name="selected"]').forEach(function (input) {
+        input.value = nextName;
+      });
+
+      var originalNameInput = editorForm.querySelector('input[name="original_name"]');
+      if (originalNameInput) {
+        originalNameInput.value = nextName;
+      }
+    }
+
+    function updateUrl(nextName) {
+      var url = new URL(window.location.href);
+      url.searchParams.set('selected', nextName);
+      url.searchParams.delete('history');
+      window.history.replaceState({}, '', url.toString());
+    }
+
+    function updateHomepageNote(nextHomepage) {
+      var note = document.getElementById('homepage-current-note');
+      var link = document.getElementById('homepage-current-link');
+      if (!note || !link) {
+        return;
+      }
+
+      if (nextHomepage) {
+        link.href = nextHomepage;
+        link.textContent = nextHomepage;
+        note.hidden = false;
+      } else {
+        link.href = '#';
+        link.textContent = '';
+        note.hidden = true;
+      }
+    }
+
+    function updateActionButtons(editorForm, nextName) {
+      var showExpertiseBtn = editorForm.querySelector('.show-expertise-btn');
+      if (showExpertiseBtn) {
+        showExpertiseBtn.setAttribute('data-person-name', nextName);
+        showExpertiseBtn.title = 'Add ' + nextName + ' to the expertise chart';
+      }
+
+      var syncButton = editorForm.querySelector('button[formaction*="/person/sync-publications"]');
+      if (syncButton) {
+        syncButton.title = 'Auto-complete publication summary from DBLP for ' + nextName;
+      }
+
+      var deleteButton = editorForm.querySelector('button[formaction*="/person/delete"]');
+      if (deleteButton) {
+        deleteButton.setAttribute('onclick', "return confirm('Are you sure you want to delete " + nextName.replace(/'/g, "\\'") + "? This cannot be undone.');");
+      }
+    }
+
+    function updateActivePersonLink(person) {
+      var activeLink = document.querySelector('.person-link.active');
+      if (!activeLink || !person) {
+        return;
+      }
+
+      var nameEl = activeLink.querySelector('strong');
+      var spanEls = activeLink.querySelectorAll('span');
+      var affiliationEl = spanEls.length > 0 ? spanEls[0] : null;
+      var metaEl = activeLink.querySelector('.person-meta-inline');
+
+      if (nameEl) {
+        nameEl.textContent = person.name || '';
+      }
+
+      if (affiliationEl) {
+        affiliationEl.textContent = person.affiliation || 'Unknown affiliation';
+      }
+
+      if (metaEl) {
+        var existingMeta = metaEl.textContent || '';
+        var simMatch = existingMeta.match(/·\s*sim\s*[0-9.]+/i);
+        var nextMeta = person.gender || 'unknown';
+        if (person.country) {
+          nextMeta += ' · ' + person.country;
+        }
+        if (simMatch) {
+          nextMeta += ' ' + simMatch[0];
+        }
+        metaEl.textContent = nextMeta;
+      }
+
+      var url = new URL(activeLink.href, window.location.origin);
+      url.searchParams.set('selected', person.name || '');
+      url.searchParams.delete('history');
+      activeLink.href = url.toString();
+    }
+
+    document.addEventListener('submit', function (event) {
+      var editorForm = event.target;
+      if (!(editorForm instanceof HTMLFormElement) || editorForm.id !== 'editorForm') {
+        return;
+      }
+
+      var submitter = event.submitter;
+      if (!submitter || submitter.getAttribute('data-async-save') !== 'true') {
+        return;
+      }
+
+      var saveButton = editorForm.querySelector('#editorSaveBtn');
+      var saveBanner = document.getElementById('save-status-banner');
+      if (!saveButton || !saveBanner) {
+        return;
+      }
+
+      var historyInput = editorForm.querySelector('input[name="history"]');
+      if (historyInput && String(historyInput.value || '').trim()) {
+        return;
+      }
+
+      event.preventDefault();
+
+      var formData = new FormData(editorForm);
+      saveButton.disabled = true;
+      saveButton.textContent = 'Saving...';
+      setBanner(saveBanner, 'running', 'Saving changes...');
+
+      fetch(editorForm.action, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        }
+      })
+        .then(function (response) {
+          return response.json().then(function (payload) {
+            if (!response.ok) {
+              var errorMessage = payload && payload.error ? payload.error : 'Failed to save changes.';
+              throw new Error(errorMessage);
+            }
+            return payload;
+          });
+        })
+        .then(function (payload) {
+          var person = payload.person || {};
+          var nextName = String(person.name || '').trim();
+          if (!nextName) {
+            throw new Error('Save succeeded, but response did not include a person name.');
+          }
+
+          updateSelectedInputs(editorForm, nextName);
+          updateUrl(nextName);
+          updateHomepageNote(String(person.homepage || '').trim());
+          updateActionButtons(editorForm, nextName);
+          updateActivePersonLink(person);
+
+          var historyInputs = document.querySelectorAll('input[name="history"]');
+          historyInputs.forEach(function (input) {
+            input.value = '';
+          });
+
+          document.querySelectorAll('.history-notice').forEach(function (notice) {
+            notice.remove();
+          });
+
+          setBanner(saveBanner, 'success', payload.message || 'Person updated successfully.');
+        })
+        .catch(function (error) {
+          setBanner(saveBanner, 'error', error.message || 'Failed to save changes.');
+        })
+        .finally(function () {
+          saveButton.disabled = false;
+          saveButton.textContent = 'Save changes';
+        });
+    });
   }());
 
   (function () {
@@ -967,14 +1194,17 @@
 
   (function () {
     // Handle the "Show expertise" button in the Edit Person panel.
-    document.querySelectorAll('.show-expertise-btn').forEach(function (btn) {
-      btn.addEventListener('click', function (e) {
-        e.preventDefault();
-        var personName = btn.getAttribute('data-person-name');
-        if (typeof window.addExpertisePerson === 'function') {
-          window.addExpertisePerson(personName);
-        }
-      });
+    document.addEventListener('click', function (event) {
+      var btn = event.target.closest('.show-expertise-btn');
+      if (!btn) {
+        return;
+      }
+
+      event.preventDefault();
+      var personName = btn.getAttribute('data-person-name');
+      if (typeof window.addExpertisePerson === 'function') {
+        window.addExpertisePerson(personName);
+      }
     });
   }());
   </script>

@@ -309,6 +309,77 @@ button:hover {
   color: #fff;
 }
 
+.sort-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.sort-controls-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: rgba(31, 31, 25, 0.78);
+}
+
+.sort-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border: 1px solid rgba(14, 106, 97, 0.25);
+  background: rgba(201, 235, 230, 0.45);
+  border-radius: 999px;
+}
+
+.sort-toggle-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(31, 31, 25, 0.78);
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0.36rem 0.68rem;
+}
+
+.sort-toggle-btn:hover {
+  transform: none;
+  filter: brightness(0.99);
+}
+
+.sort-toggle-btn.active {
+  background: #ffffff;
+  color: var(--accent);
+  border-color: rgba(14, 106, 97, 0.35);
+  box-shadow: 0 1px 2px rgba(14, 106, 97, 0.2);
+}
+
+.bulk-tag-form {
+  display: grid;
+  gap: 0.42rem;
+  margin-bottom: 0.85rem;
+  padding: 0.56rem;
+  border: 1px dashed rgba(84, 62, 44, 0.28);
+  border-radius: 0.62rem;
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.bulk-tag-row {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.bulk-tag-row input {
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.bulk-tag-row button {
+  flex: 0 0 auto;
+}
+
 .person-list {
   list-style: none;
   margin: 0;
@@ -338,6 +409,12 @@ button:hover {
 .person-meta-inline {
   font-size: 0.8rem;
   opacity: 0.78;
+}
+
+.person-summary-inline {
+  font-size: 0.78rem;
+  font-weight: 700;
+  opacity: 0.82;
 }
 
 .person-link.active {
@@ -477,6 +554,16 @@ button:hover {
 
 .chart-wrap + .chart-wrap {
   margin-top: 0.7rem;
+}
+
+.distribution-pie-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 0.8rem;
+}
+
+.distribution-pie-grid .chart-wrap + .chart-wrap {
+  margin-top: 0;
 }
 
 .bar-chart {
@@ -878,6 +965,18 @@ button.danger {
 
   .bar-chart li {
     grid-template-columns: minmax(60px, 90px) 1fr auto;
+  }
+
+  .distribution-pie-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .bulk-tag-row {
+    flex-wrap: wrap;
+  }
+
+  .bulk-tag-row button {
+    width: 100%;
   }
 }
 
