@@ -16,7 +16,7 @@ from clean_people import clean_single
 from add_expertise_embeddings import cosine_similarity, get_or_create_topic_embedding, normalize_topic_text
 from expertise_gap_finder import find_expertise_gaps
 from llm_queries import DEFAULT_RESPONSES_MODEL
-from people import PeopleStore
+from people import PeopleStore, RemoteConflictError
 from query_dblp import DblpQueryEngine, PACMPL_PREFIX, TARGET_VENUE_PREFIXES
 from sync_people_with_publications import sync_single_person_publications
 
@@ -24,7 +24,7 @@ from sync_people_with_publications import sync_single_person_publications
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "chairvana-dev-key"
 
-store = PeopleStore()
+store = PeopleStore(auto_sync_on_conflict=False)
 
 _clean_lock = threading.Lock()
 _clean_status: dict[str, Any] = {
@@ -112,6 +112,10 @@ COUNTRY_CODE_TO_REGION: dict[str, str] = {
     country_code: region
     for region, country_codes in _REGION_COUNTRY_CODES.items()
     for country_code in country_codes
+}
+
+_NORMALIZED_REGION_NAMES: dict[str, str] = {
+    re.sub(r"\s+", " ", region).strip().casefold(): region for region in _GLOBAL_REGIONS
 }
 
 _dblp_engine_lock = threading.Lock()
@@ -257,6 +261,20 @@ def _normalize_tag_query(raw_tags: str) -> list[str]:
         seen.add(lowered)
         normalized.append(lowered)
     return normalized
+
+
+def _normalize_region_name(raw_region: str) -> str | None:
+    normalized = re.sub(r"\s+", " ", raw_region).strip().casefold()
+    if not normalized:
+        return None
+    return _NORMALIZED_REGION_NAMES.get(normalized)
+
+
+def _region_for_person(person: dict[str, Any]) -> str | None:
+    country = person.get("country")
+    if not isinstance(country, str) or not country.strip():
+        return None
+    return COUNTRY_CODE_TO_REGION.get(country.strip().upper())
 
 
 def _strip_model_date_suffix(model: str) -> str:
@@ -459,7 +477,7 @@ def _tagged_people_distribution(commit: str | None, tag_query: str) -> dict[str,
         if isinstance(country, str) and country.strip():
             normalized_country = country.strip().upper()
             country_counter[normalized_country] += 1
-            region = COUNTRY_CODE_TO_REGION.get(normalized_country)
+            region = _region_for_person(person)
             if region is not None:
                 region_counter[region] += 1
         else:
@@ -510,10 +528,11 @@ def _parse_search_query(query: str) -> dict[str, Any]:
     """
     Parse a search query into structured filters.
     Supports:
-    - Text search: matches name, affiliation, country, flags
+    - Text search: matches name, affiliation, country, region, flags
     - Tag absence: "-#invite" or "-invite"
     - Gender: "male", "female", or "gender:unknown"
     - Country: "country:USA", "country:DEU", or "country:unknown"
+    - Region: "region:Europe" or 'region:"North America"'
     - Affiliation presence: "affiliation:unknown"
     - Publications: "pubs>5", "pubs<=10", etc.
     - PC memberships: "pcs>3", "pcs<5", etc.
@@ -529,6 +548,7 @@ def _parse_search_query(query: str) -> dict[str, Any]:
         "exclude_tags": [],
         "gender": None,
         "country": None,
+        "region": None,
         "affiliation_state": None,
         "pubs_op": None,
         "pubs_count": None,
@@ -574,6 +594,9 @@ def _parse_search_query(query: str) -> dict[str, Any]:
         elif match := re.match(r"^country:(.+)$", token, re.IGNORECASE):
             raw_country = match.group(1).strip()
             filters["country"] = "unknown" if raw_country.casefold() == "unknown" else raw_country.upper()
+        elif match := re.match(r"^region:(.+)$", token, re.IGNORECASE):
+            raw_region = match.group(1).strip()
+            filters["region"] = "unknown" if raw_region.casefold() == "unknown" else _normalize_region_name(raw_region)
         elif match := re.match(r"^affiliation:(known|unknown)$", token, re.IGNORECASE):
             filters["affiliation_state"] = match.group(1).casefold()
         elif lowered_token == "unknown-affiliation":
@@ -737,6 +760,7 @@ def _project_embeddings_2d(embeddings: list[list[float]]) -> list[tuple[float, f
 def _matches_search_filters(person: dict[str, Any], filters: dict[str, Any]) -> bool:
     """Check if a person matches all the parsed search filters."""
     flags = person.get("flags")
+    person_region = _region_for_person(person)
     normalized_flags: set[str] = set()
     if isinstance(flags, list):
         normalized_flags = {
@@ -762,6 +786,12 @@ def _matches_search_filters(person: dict[str, Any], filters: dict[str, Any]) -> 
         raw_country = person.get("country")
         person_country = raw_country.strip().upper() if isinstance(raw_country, str) and raw_country.strip() else "unknown"
         if person_country != filters["country"]:
+            return False
+
+    # Check region filter
+    if filters["region"] is not None:
+        normalized_region = person_region if person_region is not None else "unknown"
+        if normalized_region != filters["region"]:
             return False
 
     # Check affiliation presence filter
@@ -797,9 +827,10 @@ def _matches_search_filters(person: dict[str, Any], filters: dict[str, Any]) -> 
         name = str(person.get("name", "")).casefold()
         affiliation = str(person.get("affiliation", "")).casefold()
         country = str(person.get("country", "")).casefold()
+        region = person_region.casefold() if isinstance(person_region, str) else ""
         flags_text = " ".join(flags).casefold() if isinstance(flags, list) else ""
 
-        searchable_text = f"{name} {affiliation} {country} {flags_text}"
+        searchable_text = f"{name} {affiliation} {country} {region} {flags_text}"
 
         text_matched = any(text_token in searchable_text for text_token in filters["text"])
         if not text_matched:
@@ -1246,6 +1277,20 @@ def add_tag_to_filtered_people() -> Any:
 
     try:
         _, updated_count = store.update_many(updates, base_commit=history_commit)
+    except RemoteConflictError as exc:
+        flash(str(exc), "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                sort=sort_mode,
+                selected=selected_name,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
     except ValueError as exc:
         flash(str(exc), "error")
         return redirect(
@@ -1386,6 +1431,20 @@ def create_person() -> Any:
                 "country": normalized_country,
             },
             base_commit=history_commit,
+        )
+    except RemoteConflictError as exc:
+        flash(str(exc), "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                sort=sort_mode,
+                add_person=1,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
         )
     except ValueError as exc:
         flash(str(exc), "error")
@@ -1716,6 +1775,22 @@ def update_person() -> Any:
             updates,
             base_commit=history_commit,
         )
+    except RemoteConflictError as exc:
+        if _request_wants_json():
+            return jsonify({"error": str(exc), "conflict": True}), 409
+        flash(str(exc), "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                sort=sort_mode,
+                selected=original_name,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
+        )
     except ValueError as exc:
         if _request_wants_json():
             return jsonify({"error": str(exc)}), 400
@@ -1892,6 +1967,20 @@ def delete_person() -> Any:
         store.delete_person(
             original_name,
             base_commit=history_commit,
+        )
+    except RemoteConflictError as exc:
+        flash(str(exc), "error")
+        return redirect(
+            url_for(
+                "index",
+                q=query,
+                sort=sort_mode,
+                selected=original_name,
+                history=history_commit,
+                dist_tags=dist_tags,
+                expertise_tags=expertise_tags,
+                expertise_add=expertise_add,
+            )
         )
     except ValueError as exc:
         flash(str(exc), "error")

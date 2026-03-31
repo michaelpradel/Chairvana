@@ -2,6 +2,24 @@
 
 Chairvana supports chairs of program committees (PCs) of academic conferences. It offers support for finding PC members and managing their information and areas of expertise.
 
+## Installation
+
+1. Clone this repository and enter the main directory:
+	```
+	git clone https://github.com/michaelpradel/Chairvana.git
+	cd Chairvana
+	```
+
+2. Clone a data repository (if you have one), e.g.,:
+	```
+	git clone https://github.com/michaelpradel/Chairvana-fse2027-data.git data/.people_repo
+	```
+
+3. Install dependencies:
+	```
+	pip install -r requirements.txt
+	```
+
 ## Web UI
 
 Chairvana now includes a web-based main interface for browsing and editing people in `data/people.jsonl`.

@@ -503,7 +503,12 @@
             regionEmpty,
             payload.region || {},
             ['#1b4d96', '#2a7f62', '#b15e1d', '#6b3f8f', '#9f2f45'],
-            null
+            function (label) {
+              if (typeof window.applyDistributionSearch !== 'function') {
+                return;
+              }
+              window.applyDistributionSearch('region:' + label);
+            }
           );
         })
         .catch(function () {
@@ -812,7 +817,9 @@
           return response.json().then(function (payload) {
             if (!response.ok) {
               var errorMessage = payload && payload.error ? payload.error : 'Failed to save changes.';
-              throw new Error(errorMessage);
+              var saveErr = new Error(errorMessage);
+              if (payload && payload.conflict) saveErr.conflict = true;
+              throw saveErr;
             }
             return payload;
           });
@@ -843,6 +850,14 @@
         })
         .catch(function (error) {
           setBanner(saveBanner, 'error', error.message || 'Failed to save changes.');
+          if (error.conflict) {
+            var metaSpan = document.querySelector('.meta > span');
+            if (metaSpan) {
+              metaSpan.style.color = 'var(--danger)';
+              metaSpan.style.fontWeight = '700';
+              metaSpan.textContent = 'Reload required \u2014 edit was lost';
+            }
+          }
         })
         .finally(function () {
           saveButton.disabled = false;

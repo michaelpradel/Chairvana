@@ -19,6 +19,15 @@ DEFAULT_PEOPLE_REPO_PATH = Path(__file__).resolve().parent.parent / "data" / DEF
 DEFAULT_PEOPLE_PATH = DEFAULT_PEOPLE_REPO_PATH / "people.jsonl"
 DEFAULT_EXPERTISE_EMBEDDINGS_PATH = DEFAULT_PEOPLE_REPO_PATH / "expertise_embeddings.jsonl"
 DEFAULT_PAPER_EXPERTISE_EMBEDDINGS_PATH = DEFAULT_PEOPLE_REPO_PATH / "paper_expertise_embeddings.jsonl"
+DEFAULT_PEOPLE_REPO_REMOTE = "https://github.com/michaelpradel/Chairvana-fse2027-data.git"
+DEFAULT_PEOPLE_REPO_REMOTE_NAME = "origin"
+DEFAULT_PEOPLE_REPO_BRANCH = "main"
+
+
+class RemoteConflictError(RuntimeError):
+    """Raised when a write is rejected because the remote data repository
+    has advanced beyond the local state, indicating a concurrent write by
+    another user."""
 
 
 def _merge_values(existing: Any, new_value: Any) -> Any:
@@ -134,6 +143,11 @@ class PeopleStore:
         repo_dir: Path | None = None,
         expertise_embeddings_path: Path | None = None,
         paper_expertise_embeddings_path: Path | None = None,
+        remote_url: str = DEFAULT_PEOPLE_REPO_REMOTE,
+        remote_name: str = DEFAULT_PEOPLE_REPO_REMOTE_NAME,
+        push_branch: str = DEFAULT_PEOPLE_REPO_BRANCH,
+        auto_push: bool = True,
+        auto_sync_on_conflict: bool = True,
     ) -> None:
         self.path = path or DEFAULT_PEOPLE_PATH
         if repo_dir is not None:
@@ -148,6 +162,12 @@ class PeopleStore:
         self.paper_expertise_embeddings_path = paper_expertise_embeddings_path or (
             self.repo_dir / DEFAULT_PAPER_EXPERTISE_EMBEDDINGS_PATH.name
         )
+        self.remote_url = remote_url
+        self.remote_name = remote_name
+        self.push_branch = push_branch
+        self.auto_push = auto_push
+        self.auto_sync_on_conflict = auto_sync_on_conflict
+        self._force_push_on_next_commit = False
 
     def load(self, commit: str | None = None) -> dict[str, dict[str, Any]]:
         if commit is None:
@@ -654,6 +674,8 @@ class PeopleStore:
         raise RuntimeError(stderr or f"git show failed for commit {commit}")
 
     def _prepare_write_base(self, base_commit: str | None) -> None:
+        self._force_push_on_next_commit = False
+        self._check_remote_not_advanced()
         if base_commit is None:
             return
 
@@ -663,6 +685,9 @@ class PeopleStore:
             return
 
         self._git("reset", "--hard", target_commit)
+        # Historical writes intentionally rewrite branch history, so a
+        # subsequent push may require force-with-lease.
+        self._force_push_on_next_commit = True
 
     def _write_all(self, people: dict[str, dict[str, Any]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -719,12 +744,64 @@ class PeopleStore:
     def _ensure_local_repo(self) -> None:
         git_dir = self.repo_dir / ".git"
         if git_dir.exists():
+            self._ensure_remote_configured()
             return
 
         self.repo_dir.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "init", str(self.repo_dir)], check=True, capture_output=True, text=True)
         self._git("config", "user.name", "People Store Bot")
         self._git("config", "user.email", "people-store@local")
+        self._ensure_remote_configured()
+
+    def _ensure_remote_configured(self) -> None:
+        if not self.remote_url:
+            return
+
+        remote_result = self._git("remote", "get-url", self.remote_name, check=False)
+        if remote_result.returncode == 0:
+            current_url = remote_result.stdout.strip()
+            if current_url != self.remote_url:
+                self._git("remote", "set-url", self.remote_name, self.remote_url)
+            return
+
+        stderr = remote_result.stderr.strip()
+        if "No such remote" in stderr:
+            self._git("remote", "add", self.remote_name, self.remote_url)
+            return
+
+        raise RuntimeError(stderr or f"git remote get-url failed for {self.remote_name}")
+
+    def _fetch_remote(self) -> None:
+        fetch_result = self._git("fetch", self.remote_name, check=False)
+        if fetch_result.returncode != 0:
+            stderr = fetch_result.stderr.strip()
+            raise RuntimeError(stderr or f"git fetch {self.remote_name} failed")
+
+    def _check_remote_not_advanced(self) -> None:
+        if not self.auto_push or not self.remote_url:
+            return
+        git_dir = self.repo_dir / ".git"
+        if not git_dir.exists():
+            return  # Fresh repo; no remote state to compare against.
+        self._fetch_remote()
+        local_head = self._current_head_commit()
+        if local_head is None:
+            return  # No local commits yet; nothing to conflict with.
+        remote_ref = f"{self.remote_name}/{self.push_branch}"
+        remote_result = self._git("rev-parse", remote_ref, check=False)
+        if remote_result.returncode != 0:
+            return  # Remote branch does not exist yet; first push.
+        remote_head = remote_result.stdout.strip()
+        if local_head != remote_head:
+            if self.auto_sync_on_conflict:
+                # Automatically fast-forward local to remote HEAD so the
+                # upcoming write is applied on top of the latest data.
+                self._git("reset", "--hard", remote_head)
+                return
+            raise RemoteConflictError(
+                "Data was modified by another user. Your edit was lost. "
+                "Please reload before making any edits."
+            )
 
     def _current_head_commit(self) -> str | None:
         self._ensure_local_repo()
@@ -756,3 +833,33 @@ class PeopleStore:
             raise RuntimeError(diff_status.stderr.strip() or "git diff failed")
 
         self._git("commit", "-m", message)
+        try:
+            if self.auto_push:
+                self._push_latest_commit(force_with_lease=self._force_push_on_next_commit)
+        finally:
+            self._force_push_on_next_commit = False
+
+    def _push_latest_commit(self, *, force_with_lease: bool) -> None:
+        push_args = ["push"]
+        if force_with_lease:
+            push_args.append("--force-with-lease")
+        push_args.extend([self.remote_name, f"HEAD:{self.push_branch}"])
+        push_result = self._git(*push_args, check=False)
+        if push_result.returncode == 0:
+            return
+
+        # Push rejected — another user pushed during the write window.
+        # Roll back the local commit, then resync local HEAD to remote.
+        self._git("reset", "--hard", "HEAD~1", check=False)
+        fetch_result = self._git("fetch", self.remote_name, check=False)
+        if fetch_result.returncode == 0:
+            self._git(
+                "reset",
+                "--hard",
+                f"{self.remote_name}/{self.push_branch}",
+                check=False,
+            )
+        raise RemoteConflictError(
+            "Data was modified by another user. Your edit was lost. "
+            "Please reload before making any edits."
+        )

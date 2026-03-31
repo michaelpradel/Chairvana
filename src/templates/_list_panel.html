@@ -16,15 +16,15 @@
     <input type="hidden" name="expertise_tags" value="{{ expertise_tags }}" />
     <input type="hidden" name="expertise_add" value="{{ expertise_add }}" />
     <input type="hidden" name="sort" id="people_sort_mode" value="{{ sort_mode }}" />
-    <label for="q" title="Search by name, affiliation, country, flags, gender, or publication/PC membership count">
+    <label for="q" title="Search by name, affiliation, country, region, flags, gender, or publication/PC membership count">
       Search <span class="help-icon">?</span>
     </label>
     <input 
       id="q" 
       name="q" 
       value="{{ query }}" 
-      placeholder="e.g., Germany t:testing pubs>5"
-      title="Supported filters: text, -#tag, male/female, gender:unknown, country:USA, affiliation:unknown, pubs>N, pcs>N, t:topic"
+      placeholder="e.g., Europe t:testing pubs>5"
+      title="Supported filters: text, -#tag, male/female, gender:unknown, country:USA, region:Europe, affiliation:unknown, pubs>N, pcs>N, t:topic"
     />
     <div class="sort-controls" aria-label="Sort people list">
       <span class="sort-controls-label">Sort</span>
@@ -39,11 +39,13 @@
         <summary>Search syntax help</summary>
         <dl>
           <dt>Text search</dt>
-          <dd>Matches name, affiliation, country, or flags. E.g., <code>CISPA</code>, <code>SGP</code>, <code>USA</code></dd>
+          <dd>Matches name, affiliation, country, region, or flags. E.g., <code>CISPA</code>, <code>Europe</code>, <code>SGP</code>, <code>USA</code></dd>
           <dt>Gender</dt>
           <dd>Search by <code>male</code>, <code>female</code>, or <code>gender:unknown</code></dd>
           <dt>Country</dt>
           <dd>Search by <code>country:USA</code>, <code>country:DEU</code>, or <code>country:unknown</code></dd>
+          <dt>Region</dt>
+          <dd>Search by <code>region:Europe</code> or <code>region:"North America"</code></dd>
           <dt>Affiliation</dt>
           <dd>Filter people with missing affiliation using <code>affiliation:unknown</code></dd>
           <dt>Publications</dt>
