@@ -20,6 +20,8 @@ Chairvana supports chairs of program committees (PCs) of academic conferences. I
 	pip install -r requirements.txt
 	```
 
+4. Optionally, to use features based on semantic embeddings of expertise, add an OpenAI API key into file `.openai_token`.
+
 ## Web UI
 
 1. Start the UI:
