@@ -26,6 +26,7 @@ Chairvana supports chairs of program committees (PCs) of academic conferences. I
 	```bash
 	python src/web_ui.py
 	```
+
 2. Open http://127.0.0.1:5000 in your browser.
 
 ## Command-Line Tools
