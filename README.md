@@ -40,10 +40,10 @@ Querying the full `data/dblp.xml.gz` can be slow. Create a filtered JSONL snapsh
 python src/query_dblp.py --preprocess
 ```
 
-This writes `data/dblp_filtered.jsonl` containing only:
+This writes `data/.people_repo/dblp_filtered.jsonl` containing only:
 
 - publication types: `inproceedings`, `article`
 - venues (by DBLP key prefix): `conf/icse`, `conf/sigsoft`, `conf/kbse`, `conf/issta`, `conf/oopsla`
 
-After preprocessing, normal `src/query_dblp.py` queries automatically use `data/dblp_filtered.jsonl` when present.
+After preprocessing, normal `src/query_dblp.py` queries automatically use `data/.people_repo/dblp_filtered.jsonl` when present.
 

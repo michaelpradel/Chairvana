@@ -1,10 +1,10 @@
 """Find and merge likely duplicate people records via LLM prompts.
 
 Workflow:
-1. Load all people via ``PeopleStore``.
+1. Load all people via ``DataStore``.
 2. Ask an LLM to identify high-confidence duplicate name groups.
 3. For each duplicate group, ask an LLM to merge records pairwise.
-4. Persist the full merged snapshot back via ``PeopleStore.overwrite_all``.
+4. Persist the full merged snapshot back via ``DataStore.overwrite_all``.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Any, Sequence
 from pydantic import BaseModel
 
 from llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
-from people import PeopleStore
+from data_store import DataStore
 
 
 DUPLICATE_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "find_duplicate_people.txt"
@@ -46,7 +46,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--people-file",
         type=Path,
         default=None,
-        help="Optional people JSONL path override. By default, people.py chooses the store location.",
+        help="Optional people JSONL path override. By default, data_store.py chooses the store location.",
     )
     parser.add_argument(
         "--model",
@@ -295,7 +295,7 @@ def _merge_groups(
 
 
 def dedup_people(
-    store: PeopleStore,
+    store: DataStore,
     model: str,
     dry_run: bool,
     dry_run_max_groups: int,
@@ -382,7 +382,7 @@ def dedup_people(
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    store = PeopleStore(path=args.people_file) if args.people_file is not None else PeopleStore()
+    store = DataStore(path=args.people_file) if args.people_file is not None else DataStore()
     final_count, merged_count = dedup_people(
         store,
         args.model,

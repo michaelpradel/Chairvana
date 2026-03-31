@@ -20,7 +20,7 @@ from typing import Any, Literal, Sequence
 from pydantic import BaseModel
 
 from llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
-from people import PeopleStore
+from data_store import DataStore
 from web_search import find_homepage_and_email
 
 
@@ -78,7 +78,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--people-file",
         type=Path,
         default=None,
-        help="Optional people JSONL path override. By default, people.py chooses the store location.",
+        help="Optional people JSONL path override. By default, data_store.py chooses the store location.",
     )
     parser.add_argument(
         "--model",
@@ -199,7 +199,7 @@ def infer_gender_from_homepage(name: str, homepage: str, model: str) -> str:
     return parsed.gender
 
 
-def _ensure_homepage(person: dict[str, Any], store: PeopleStore) -> dict[str, Any]:
+def _ensure_homepage(person: dict[str, Any], store: DataStore) -> dict[str, Any]:
     homepage = person.get("homepage")
     if isinstance(homepage, str) and homepage.strip():
         return person
@@ -227,7 +227,7 @@ def _ensure_homepage(person: dict[str, Any], store: PeopleStore) -> dict[str, An
 
 
 def infer_gender_for_person(
-    store: PeopleStore,
+    store: DataStore,
     person: dict[str, Any],
     model: str,
 ) -> tuple[str, str, bool]:
@@ -250,7 +250,7 @@ def infer_gender_for_person(
 
 
 def infer_and_store_gender_for_person(
-    store: PeopleStore,
+    store: DataStore,
     person: dict[str, Any],
     model: str,
 ) -> tuple[str, str, bool]:
@@ -260,7 +260,7 @@ def infer_and_store_gender_for_person(
     return updated["name"], gender, used_tier2
 
 
-def _flush_gender_updates(store: PeopleStore, pending_updates: list[dict[str, str]]) -> int:
+def _flush_gender_updates(store: DataStore, pending_updates: list[dict[str, str]]) -> int:
     if not pending_updates:
         return 0
 
@@ -271,7 +271,7 @@ def _flush_gender_updates(store: PeopleStore, pending_updates: list[dict[str, st
 
 
 def infer_and_store_gender(
-    store: PeopleStore,
+    store: DataStore,
     requested_name: str,
     model: str,
 ) -> tuple[str, str | None, bool, bool]:
@@ -288,7 +288,7 @@ def infer_and_store_gender(
     return name, gender, used_tier2, False
 
 
-def process_people_batch(store: PeopleStore, model: str, first_n: int, process_all: bool) -> int:
+def process_people_batch(store: DataStore, model: str, first_n: int, process_all: bool) -> int:
     people = store.list_people()
     selected = people if process_all else people[:first_n]
     print(f"[Batch] Processing {len(selected)} people")
@@ -364,7 +364,7 @@ def process_people_batch(store: PeopleStore, model: str, first_n: int, process_a
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    store = PeopleStore(path=args.people_file) if args.people_file is not None else PeopleStore()
+    store = DataStore(path=args.people_file) if args.people_file is not None else DataStore()
 
     if args.name:
         name, gender, used_tier2, skipped = infer_and_store_gender(store, args.name, args.model)

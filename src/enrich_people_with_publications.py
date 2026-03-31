@@ -11,7 +11,7 @@ import argparse
 from datetime import datetime
 from typing import Any
 
-from people import PeopleStore
+from data_store import DataStore
 from query_dblp import DblpQueryEngine, create_publication_summary
 
 
@@ -49,7 +49,7 @@ def sync_people_with_publications(
     if current_year is None:
         current_year = datetime.now().year
 
-    store = PeopleStore()
+    store = DataStore()
     people = store.load()
     known_people = set(people)
     min_year = current_year - max_years_back

@@ -1,14 +1,14 @@
-"""Utilities for reading and updating people-related JSONL stores.
+"""Utilities for reading and updating JSONL stores in the data repository.
 
-This module is the single point of entry for writes to `data/people.jsonl`
-and `data/expertise_embeddings.jsonl` inside the local people git repo.
-Each person is uniquely identified by the `name` field.
+This module is the single point of entry for writes to store-managed files
+inside the local data git repository under ``data/.people_repo``.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Iterable
@@ -19,6 +19,7 @@ DEFAULT_PEOPLE_REPO_PATH = Path(__file__).resolve().parent.parent / "data" / DEF
 DEFAULT_PEOPLE_PATH = DEFAULT_PEOPLE_REPO_PATH / "people.jsonl"
 DEFAULT_EXPERTISE_EMBEDDINGS_PATH = DEFAULT_PEOPLE_REPO_PATH / "expertise_embeddings.jsonl"
 DEFAULT_PAPER_EXPERTISE_EMBEDDINGS_PATH = DEFAULT_PEOPLE_REPO_PATH / "paper_expertise_embeddings.jsonl"
+DEFAULT_DBLP_FILTERED_PATH = DEFAULT_PEOPLE_REPO_PATH / "dblp_filtered.jsonl"
 DEFAULT_PEOPLE_REPO_REMOTE = "https://github.com/michaelpradel/Chairvana-fse2027-data.git"
 DEFAULT_PEOPLE_REPO_REMOTE_NAME = "origin"
 DEFAULT_PEOPLE_REPO_BRANCH = "main"
@@ -134,8 +135,8 @@ def _merge_person_record(existing: dict[str, Any], updates: dict[str, Any]) -> d
     return merged
 
 
-class PeopleStore:
-    """Read and update person records stored as JSONL."""
+class DataStore:
+    """Read and update data repository records stored as JSONL."""
 
     def __init__(
         self,
@@ -162,6 +163,7 @@ class PeopleStore:
         self.paper_expertise_embeddings_path = paper_expertise_embeddings_path or (
             self.repo_dir / DEFAULT_PAPER_EXPERTISE_EMBEDDINGS_PATH.name
         )
+        self.dblp_filtered_path = self.repo_dir / DEFAULT_DBLP_FILTERED_PATH.name
         self.remote_url = remote_url
         self.remote_name = remote_name
         self.push_branch = push_branch
@@ -659,6 +661,39 @@ class PeopleStore:
 
     def _paper_expertise_repo_path(self) -> str:
         return self.paper_expertise_embeddings_path.relative_to(self.repo_dir).as_posix()
+
+    def _dblp_filtered_repo_path(self) -> str:
+        return self.dblp_filtered_path.relative_to(self.repo_dir).as_posix()
+
+    def replace_dblp_filtered(self, source_path: Path, *, base_commit: str | None = None) -> None:
+        """Replace dblp_filtered.jsonl in the repo and commit the update."""
+        if not source_path.exists():
+            raise FileNotFoundError(f"Missing filtered DBLP JSONL source: {source_path}")
+
+        self._prepare_write_base(base_commit)
+        self.dblp_filtered_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_path, self.dblp_filtered_path)
+        self._commit_store_files(
+            message="Update dblp_filtered.jsonl",
+            repo_paths=[self._dblp_filtered_repo_path()],
+        )
+
+    def write_dblp_filtered_lines(
+        self,
+        lines: Iterable[str],
+        *,
+        base_commit: str | None = None,
+    ) -> None:
+        """Write dblp_filtered.jsonl content and commit the update."""
+        self._prepare_write_base(base_commit)
+        self.dblp_filtered_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.dblp_filtered_path.open("w", encoding="utf-8") as file_obj:
+            for line in lines:
+                file_obj.write(line)
+        self._commit_store_files(
+            message="Update dblp_filtered.jsonl",
+            repo_paths=[self._dblp_filtered_repo_path()],
+        )
 
     def _read_people_file_from_commit(self, commit: str) -> str:
         return self._read_file_from_commit(commit, self._people_repo_path())

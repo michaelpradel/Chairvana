@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+import os
 import re
 import random
 import threading
@@ -16,7 +18,7 @@ from clean_people import clean_single
 from add_expertise_embeddings import cosine_similarity, get_or_create_topic_embedding, normalize_topic_text
 from expertise_gap_finder import find_expertise_gaps
 from llm_queries import DEFAULT_RESPONSES_MODEL
-from people import PeopleStore, RemoteConflictError
+from data_store import DataStore, RemoteConflictError
 from query_dblp import DblpQueryEngine, PACMPL_PREFIX, TARGET_VENUE_PREFIXES
 from sync_people_with_publications import sync_single_person_publications
 
@@ -24,7 +26,7 @@ from sync_people_with_publications import sync_single_person_publications
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "chairvana-dev-key"
 
-store = PeopleStore(auto_sync_on_conflict=False)
+store = DataStore(auto_sync_on_conflict=False)
 
 _clean_lock = threading.Lock()
 _clean_status: dict[str, Any] = {
@@ -2105,4 +2107,15 @@ def sync_person_publications() -> Any:
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    parser = argparse.ArgumentParser(description="Run the Chairvana web UI.")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("PORT", "5000")),
+        help="Port for the web server (default: 5000 or PORT env var).",
+    )
+    args = parser.parse_args()
+    if args.port < 1 or args.port > 65535:
+        parser.error("--port must be between 1 and 65535")
+
+    app.run(debug=True, port=args.port)

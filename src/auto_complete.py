@@ -5,7 +5,7 @@ Two-stage process:
 2. For people missing affiliation: find homepage + infer affiliation/country via web search.
 
 For stage 2, to reduce name ambiguity, the prompt includes a few recent paper titles from DBLP.
-All reads/writes of people records go through ``PeopleStore``.
+All reads/writes of people records go through ``DataStore``.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import Any, Sequence
 from pydantic import BaseModel, HttpUrl, TypeAdapter, ValidationError
 
 from llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
-from people import PeopleStore
+from data_store import DataStore
 from query_dblp import DblpQueryEngine, get_target_publications_for_author
 
 
@@ -65,7 +65,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--people-file",
         type=Path,
         default=None,
-        help="Optional people JSONL path override. By default, people.py chooses the store location.",
+        help="Optional people JSONL path override. By default, data_store.py chooses the store location.",
     )
     parser.add_argument(
         "--model",
@@ -210,7 +210,7 @@ def _infer_country_batch(people_batch: list[dict[str, Any]], model: str) -> dict
 
 
 def _infer_and_save_countries(
-    store: PeopleStore,
+    store: DataStore,
     model: str,
     dry_run: bool,
 ) -> int:
@@ -454,7 +454,7 @@ def _iter_targets_for_affiliation(
 
 def auto_complete_affiliations(
     *,
-    store: PeopleStore,
+    store: DataStore,
     model: str,
     requested_name: str | None,
     limit: int | None,
@@ -526,7 +526,7 @@ def auto_complete_affiliations(
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    store = PeopleStore(path=args.people_file) if args.people_file is not None else PeopleStore()
+    store = DataStore(path=args.people_file) if args.people_file is not None else DataStore()
 
     country_updated, processed, changed, skipped = auto_complete_affiliations(
         store=store,

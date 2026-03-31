@@ -20,7 +20,7 @@ except Exception:  # noqa: BLE001
     np = None
 
 from add_expertise_embeddings import DEFAULT_MODEL, cosine_similarity, embed_texts
-from people import PeopleStore
+from data_store import DataStore
 from query_dblp import (
     DblpQueryEngine,
     Publication,
@@ -294,7 +294,7 @@ def _collect_target_papers(min_year: int, max_year: int, engine: DblpQueryEngine
 def _ensure_paper_embeddings(
     papers: list[Publication],
     *,
-    store: PeopleStore,
+    store: DataStore,
     model: str,
     batch_size: int,
     recompute: bool,
@@ -372,7 +372,7 @@ def find_expertise_gaps(
         raise ValueError("top_k must be >= 1")
 
     normalized_tag = _normalize_tag(tag)
-    store = PeopleStore()
+    store = DataStore()
 
     people = store.list_people(commit=base_commit)
     tagged_people = [
@@ -572,7 +572,7 @@ def recompute_paper_similarity_index(
     if np is None:
         raise RuntimeError("numpy is required to build the paper similarity index")
 
-    store = PeopleStore()
+    store = DataStore()
     engine = DblpQueryEngine(preload_index=True)
     papers = _collect_target_papers(min_year, max_year, engine)
     paper_embeddings = _ensure_paper_embeddings(

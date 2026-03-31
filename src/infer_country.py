@@ -4,7 +4,7 @@ For people whose affiliation is set but country is missing, this script asks
 an LLM to infer the country based only on the affiliation name (no web search).
 Results are returned as ISO 3166-1 alpha-3 country codes.
 
-All reads/writes of people records go through ``PeopleStore``.
+All reads/writes of people records go through ``DataStore``.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Any, Literal, Sequence
 from pydantic import BaseModel
 
 from llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
-from people import PeopleStore
+from data_store import DataStore
 
 
 INFER_COUNTRY_PROMPT_PATH = (
@@ -55,7 +55,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--people-file",
         type=Path,
         default=None,
-        help="Optional people JSONL path override. By default, people.py chooses the store location.",
+        help="Optional people JSONL path override. By default, data_store.py chooses the store location.",
     )
     parser.add_argument(
         "--model",
@@ -211,7 +211,7 @@ def infer_country_batch(people_batch: list[dict[str, Any]], model: str) -> dict[
     return result
 
 
-def _flush_country_updates(store: PeopleStore, pending_updates: list[dict[str, Any]]) -> int:
+def _flush_country_updates(store: DataStore, pending_updates: list[dict[str, Any]]) -> int:
     """Write pending country updates to store."""
     if not pending_updates:
         return 0
@@ -223,7 +223,7 @@ def _flush_country_updates(store: PeopleStore, pending_updates: list[dict[str, A
 
 
 def process_people_batch(
-    store: PeopleStore,
+    store: DataStore,
     model: str,
     first_n: int = 10,
     process_all: bool = False,
@@ -233,7 +233,7 @@ def process_people_batch(
     """Process a batch of people to infer missing countries.
     
     Args:
-        store: PeopleStore instance
+        store: DataStore instance
         model: OpenAI model to use
         first_n: Number of people needing country to process if not using --all
         process_all: If True, process all people needing country (ignores first_n)
@@ -311,7 +311,7 @@ def process_people_batch(
 
 
 def infer_country_for_person(
-    store: PeopleStore,
+    store: DataStore,
     requested_name: str,
     model: str,
     dry_run: bool = False,
@@ -349,7 +349,7 @@ def infer_country_for_person(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = parse_args(argv)
-    store = PeopleStore(path=parser.people_file) if parser.people_file is not None else PeopleStore()
+    store = DataStore(path=parser.people_file) if parser.people_file is not None else DataStore()
 
     if parser.name:
         name, country, updated = infer_country_for_person(

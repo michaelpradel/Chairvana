@@ -16,7 +16,7 @@ import math
 from typing import Any, Sequence
 
 from llm_queries import get_openai_client, log_llm_call
-from people import PeopleStore
+from data_store import DataStore
 from query_dblp import DblpQueryEngine, Publication, get_target_publications_for_author
 
 
@@ -89,7 +89,7 @@ def cosine_similarity(lhs: Sequence[float], rhs: Sequence[float]) -> float | Non
 
 
 def get_or_create_topic_embedding(
-    store: PeopleStore,
+    store: DataStore,
     topic: str,
     model: str = DEFAULT_MODEL,
 ) -> dict[str, Any] | None:
@@ -187,7 +187,7 @@ def add_expertise_embeddings(
     Returns:
         Tuple of (updated_people_count, without_target_publications_count).
     """
-    store = PeopleStore()
+    store = DataStore()
     people = store.load()
     years_back = MAX_YEAR - MIN_YEAR
     engine = DblpQueryEngine(preload_index=True)
@@ -265,7 +265,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
 
     if args.topic:
-        store = PeopleStore()
+        store = DataStore()
         created_topics: list[str] = []
         for raw_topic in args.topic:
             if not isinstance(raw_topic, str) or not raw_topic.strip():

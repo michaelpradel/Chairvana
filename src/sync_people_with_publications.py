@@ -11,7 +11,7 @@ import argparse
 from datetime import datetime
 from typing import Any
 
-from people import PeopleStore
+from data_store import DataStore
 from query_dblp import DblpQueryEngine, create_publication_summary
 
 
@@ -44,7 +44,7 @@ def sync_single_person_publications(
     if current_year is None:
         current_year = datetime.now().year
 
-    store = PeopleStore()
+    store = DataStore()
     people = store.load(commit=base_commit)
     if normalized_name not in people:
         raise ValueError(f"No person found with name: {normalized_name}")
@@ -101,7 +101,7 @@ def sync_people_with_publications(
     if current_year is None:
         current_year = datetime.now().year
 
-    store = PeopleStore()
+    store = DataStore()
     people = store.load()
     known_people = set(people)
     min_year = current_year - max_years_back

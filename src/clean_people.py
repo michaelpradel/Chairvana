@@ -4,7 +4,7 @@ This script asks an LLM to normalize affiliation data for either:
 - one entry identified by name, or
 - all entries in the people store.
 
-All writes go through ``PeopleStore`` so updates are committed to the
+All writes go through ``DataStore`` so updates are committed to the
 internal local git repository used by Chairvana.
 """
 
@@ -19,7 +19,7 @@ from typing import Any, Sequence
 from pydantic import BaseModel
 
 from llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
-from people import PeopleStore
+from data_store import DataStore
 
 
 COUNTRY_CODE_RE = re.compile(r"^[A-Z]{3}$")
@@ -49,7 +49,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--people-file",
         type=Path,
         default=None,
-        help="Optional people JSONL path override. By default, people.py chooses the store location.",
+        help="Optional people JSONL path override. By default, data_store.py chooses the store location.",
     )
     parser.add_argument(
         "--model",
@@ -134,7 +134,7 @@ def _get_person_by_name(people: dict[str, dict[str, Any]], requested_name: str) 
     raise ValueError(f"Ambiguous name {requested_name!r}: {matches}")
 
 
-def clean_single(store: PeopleStore, name: str, model: str, base_commit: str | None = None) -> tuple[bool, str]:
+def clean_single(store: DataStore, name: str, model: str, base_commit: str | None = None) -> tuple[bool, str]:
     people = store.load(commit=base_commit)
     original_name, entry = _get_person_by_name(people, name)
     cleaned = clean_record(entry, model)
@@ -146,7 +146,7 @@ def clean_single(store: PeopleStore, name: str, model: str, base_commit: str | N
     return True, cleaned["name"]
 
 
-def clean_all(store: PeopleStore, model: str) -> tuple[int, int]:
+def clean_all(store: DataStore, model: str) -> tuple[int, int]:
     people = store.load()
     cleaned_records: list[dict[str, Any]] = []
     changed_count = 0
@@ -167,7 +167,7 @@ def clean_all(store: PeopleStore, model: str) -> tuple[int, int]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    store = PeopleStore(path=args.people_file) if args.people_file is not None else PeopleStore()
+    store = DataStore(path=args.people_file) if args.people_file is not None else DataStore()
 
     if args.name:
         changed, cleaned_name = clean_single(store, args.name, args.model)

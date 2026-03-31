@@ -9,7 +9,7 @@ Goals:
 - Extend features without breaking repository conventions.
 
 ## Architecture At A Glance
-- Core data access and persistence: [src/people.py](src/people.py)
+- Core data access and persistence: [src/data_store.py](src/data_store.py)
 - LLM client, structured parsing, and call logging: [src/llm_queries.py](src/llm_queries.py)
 - Main web app (Flask): [src/web_ui.py](src/web_ui.py)
 - DBLP preprocessing + query engine: [src/query_dblp.py](src/query_dblp.py)
@@ -27,18 +27,18 @@ Goals:
 - Prompt templates used by structured LLM calls: [prompts/](prompts/)
 
 ## Global Invariants (Do Not Break)
-1. All people store reads/writes go through PeopleStore.
-- Use [src/people.py](src/people.py).
+1. All people store reads/writes go through DataStore.
+- Use [src/data_store.py](src/data_store.py).
 - Do not directly read/write JSONL store files in [data/.people_repo/](data/.people_repo/).
-- Do not bypass PeopleStore with ad-hoc file I/O for people/expertise data.
+- Do not bypass DataStore with ad-hoc file I/O for people/expertise data.
 
 2. Person identity is name-based.
-- People records are keyed by name in PeopleStore.
+- People records are keyed by name in DataStore.
 - Any rename must go through methods that preserve uniqueness checks.
 
 3. Writes are commit-backed in a local git repo.
 - The canonical mutable store is under [data/.people_repo/](data/.people_repo/).
-- PeopleStore write operations commit automatically.
+- DataStore write operations commit automatically.
 - Historical edit mode uses base_commit and may reset the people repo work tree to that snapshot before writing.
 
 4. Data normalization rules must stay consistent.
@@ -60,7 +60,7 @@ Goals:
 - DBLP inputs/cache:
   - [data/dblp_20260318.xml.gz](data/dblp_20260318.xml.gz) (raw dump)
   - [data/dblp.dtd](data/dblp.dtd)
-  - [data/dblp_filtered.jsonl](data/dblp_filtered.jsonl) (filtered snapshot for queries)
+  - [data/.people_repo/dblp_filtered.jsonl](data/.people_repo/dblp_filtered.jsonl) (filtered snapshot for queries)
   - [data/main_track_venues.json](data/main_track_venues.json)
 - Expertise gap index cache:
   - [data/expertise_gap_paper_matrix_index.npz](data/expertise_gap_paper_matrix_index.npz)
@@ -87,7 +87,7 @@ Goals:
 
 ## Script Design Expectations
 - Scripts should:
-  - Load data via PeopleStore.
+  - Load data via DataStore.
   - Validate and normalize external/LLM values before persisting.
   - Support dry-run when feasible for large updates.
   - Print useful progress for long-running batches.
@@ -95,7 +95,7 @@ Goals:
 
 ## Safe Change Playbook For Agents
 1. When adding/changing person fields:
-- Update normalization/merge behavior in [src/people.py](src/people.py).
+- Update normalization/merge behavior in [src/data_store.py](src/data_store.py).
 - Update all writers and key UI/forms as needed.
 - Keep backward compatibility for existing JSONL entries.
 
@@ -109,7 +109,7 @@ Goals:
 - Ensure logs still capture prompt + structured response.
 
 4. When writing from a historical snapshot:
-- Use PeopleStore base_commit parameters consistently.
+- Use DataStore base_commit parameters consistently.
 - Assume write operations can reset the people repo state to the selected snapshot before committing new changes.
 
 ## Validation Checklist After Edits
@@ -118,11 +118,11 @@ Goals:
 - If routes/templates changed:
   - run [src/web_ui.py](src/web_ui.py) and smoke-test main flows in browser.
 - If people store logic changed:
-  - verify add/update/delete paths and history behavior via PeopleStore-backed calls.
+  - verify add/update/delete paths and history behavior via DataStore-backed calls.
 - If LLM pipeline changed:
   - run a small dry-run batch and verify malformed/empty fields are handled without crashing.
 
 ## Out Of Scope For Quick Fixes
-- Do not rewrite the storage layer away from PeopleStore in routine feature tasks.
-- Do not directly mutate git metadata inside [data/.people_repo/](data/.people_repo/) except through PeopleStore methods.
+- Do not rewrite the storage layer away from DataStore in routine feature tasks.
+- Do not directly mutate git metadata inside [data/.people_repo/](data/.people_repo/) except through DataStore methods.
 - Do not silently broaden venue scope without updating all dependent analyses and UI assumptions.

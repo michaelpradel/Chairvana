@@ -1,7 +1,7 @@
 """Preprocess and query a reduced DBLP JSONL snapshot.
 
 This module supports two operations:
-1. One-time preprocessing from ``data/dblp.xml.gz`` to ``data/dblp_filtered.jsonl``.
+1. One-time preprocessing from ``data/dblp.xml.gz`` to ``data/.people_repo/dblp_filtered.jsonl``.
 2. Querying publications by author from the filtered JSONL only.
 """
 
@@ -11,6 +11,7 @@ import argparse
 import gzip
 import json
 import re
+import tempfile
 import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass
@@ -21,6 +22,7 @@ from xml.sax import handler, make_parser
 from xml.sax.handler import feature_external_ges
 from xml.sax.xmlreader import AttributesImpl, InputSource
 
+from data_store import DataStore
 from pydantic import BaseModel
 
 TARGET_PUBLICATION_TAGS = {"article", "inproceedings"}
@@ -194,6 +196,7 @@ def preprocess_dblp_to_jsonl(
     xml_gz_path: Path,
     dtd_path: Path,
     output_jsonl_path: Path,
+    data_store: DataStore | None = None,
 ) -> tuple[int, int, float]:
     """Create a filtered JSONL snapshot from the DBLP XML dump.
 
@@ -206,22 +209,45 @@ def preprocess_dblp_to_jsonl(
     if not dtd_path.exists():
         raise FileNotFoundError(f"Missing DTD file: {dtd_path}")
 
-    output_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
 
     sax_parser = make_parser()
     sax_parser.setFeature(feature_external_ges, True)
     sax_parser.setEntityResolver(LocalDtdResolver(dtd_path))
 
-    with output_jsonl_path.open("w", encoding="utf-8") as output_file:
-        content_handler = DblpFilterHandler(output_file)
-        sax_parser.setContentHandler(content_handler)
+    use_store_commit = (
+        data_store is not None
+        and output_jsonl_path.resolve() == data_store.dblp_filtered_path.resolve()
+    )
 
-        with gzip.open(xml_gz_path, "rb") as xml_file:
-            source = InputSource()
-            source.setByteStream(xml_file)
-            source.setSystemId(str(xml_gz_path))
-            sax_parser.parse(source)
+    if use_store_commit:
+        assert data_store is not None
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False) as tmp_output:
+            tmp_output_path = Path(tmp_output.name)
+            content_handler = DblpFilterHandler(tmp_output)
+            sax_parser.setContentHandler(content_handler)
+
+            with gzip.open(xml_gz_path, "rb") as xml_file:
+                source = InputSource()
+                source.setByteStream(xml_file)
+                source.setSystemId(str(xml_gz_path))
+                sax_parser.parse(source)
+
+        try:
+            data_store.replace_dblp_filtered(tmp_output_path)
+        finally:
+            tmp_output_path.unlink(missing_ok=True)
+    else:
+        output_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_jsonl_path.open("w", encoding="utf-8") as output_file:
+            content_handler = DblpFilterHandler(output_file)
+            sax_parser.setContentHandler(content_handler)
+
+            with gzip.open(xml_gz_path, "rb") as xml_file:
+                source = InputSource()
+                source.setByteStream(xml_file)
+                source.setSystemId(str(xml_gz_path))
+                sax_parser.parse(source)
 
     elapsed = time.perf_counter() - started
     return content_handler.total_publications, content_handler.kept_publications, elapsed
@@ -239,7 +265,7 @@ class DblpQueryEngine:
         self.filtered_jsonl_path = (
             Path(filtered_jsonl_path)
             if filtered_jsonl_path is not None
-            else base_dir / "data" / "dblp_filtered.jsonl"
+            else base_dir / "data" / ".people_repo" / "dblp_filtered.jsonl"
         )
         if not self.filtered_jsonl_path.exists():
             raise FileNotFoundError(f"Missing filtered DBLP JSONL: {self.filtered_jsonl_path}")
@@ -676,7 +702,7 @@ def create_publication_summary(
         person_name: The person's name to search for in DBLP
         current_year: The year to use as reference (default: current year)
         max_years_back: How many years back to include (default: 5)
-        filtered_jsonl_path: Path to filtered DBLP JSONL (default: data/dblp_filtered.jsonl)
+        filtered_jsonl_path: Path to filtered DBLP JSONL (default: data/.people_repo/dblp_filtered.jsonl)
         engine: Existing query engine to reuse instead of rebuilding the index
 
     Returns:
@@ -779,7 +805,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--filtered-jsonl",
         type=Path,
         default=None,
-        help="Path to filtered DBLP JSONL cache (default: data/dblp_filtered.jsonl)",
+        help="Path to filtered DBLP JSONL cache (default: data/.people_repo/dblp_filtered.jsonl)",
     )
     parser.add_argument(
         "--preprocess",
@@ -837,11 +863,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     xml_path = args.xml if args.xml is not None else base_dir / "data" / "dblp.xml.gz"
     dtd_path = args.dtd if args.dtd is not None else base_dir / "data" / "dblp.dtd"
     filtered_jsonl_path = (
-        args.filtered_jsonl if args.filtered_jsonl is not None else base_dir / "data" / "dblp_filtered.jsonl"
+        args.filtered_jsonl
+        if args.filtered_jsonl is not None
+        else base_dir / "data" / ".people_repo" / "dblp_filtered.jsonl"
     )
 
     if args.preprocess:
-        total, kept, elapsed = preprocess_dblp_to_jsonl(xml_path, dtd_path, filtered_jsonl_path)
+        data_store = DataStore()
+        store_for_preprocess = (
+            data_store if filtered_jsonl_path.resolve() == data_store.dblp_filtered_path.resolve() else None
+        )
+        total, kept, elapsed = preprocess_dblp_to_jsonl(
+            xml_path,
+            dtd_path,
+            filtered_jsonl_path,
+            data_store=store_for_preprocess,
+        )
         print(f"Preprocessed DBLP in {elapsed:.2f}s")
         print(f"Scanned target publication tags: {total}")
         print(f"Kept filtered publications: {kept}")

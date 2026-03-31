@@ -1,11 +1,11 @@
 """Automatically clean and deduplicate people records via LLM prompts.
 
 Workflow:
-1. Load people through ``PeopleStore``.
+1. Load people through ``DataStore``.
 2. Clean name/affiliation/country in LLM batches (up to 20 people per query).
 3. Collapse exact-name duplicates that may be introduced by cleaning.
 4. Detect and merge likely duplicate names.
-5. Persist via ``PeopleStore.overwrite_all`` (unless ``--dry-run``).
+5. Persist via ``DataStore.overwrite_all`` (unless ``--dry-run``).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any, Sequence
 from pydantic import BaseModel
 
 from llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
-from people import PeopleStore
+from data_store import DataStore
 
 
 CLEAN_BATCH_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "clean_people_batch.txt"
@@ -74,7 +74,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--people-file",
         type=Path,
         default=None,
-        help="Optional people JSONL path override. By default, people.py chooses the store location.",
+        help="Optional people JSONL path override. By default, data_store.py chooses the store location.",
     )
     parser.add_argument(
         "--model",
@@ -441,7 +441,7 @@ def _plan_groups(groups: list[DuplicateGroup]) -> None:
 
 
 def run_auto_clean_and_dedup(
-    store: PeopleStore,
+    store: DataStore,
     model: str,
     dry_run: bool,
 ) -> tuple[int, int, int]:
@@ -543,7 +543,7 @@ def run_auto_clean_and_dedup(
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    store = PeopleStore(path=args.people_file) if args.people_file is not None else PeopleStore()
+    store = DataStore(path=args.people_file) if args.people_file is not None else DataStore()
     final_count, merged_count, processed_count = run_auto_clean_and_dedup(
         store=store,
         model=args.model,

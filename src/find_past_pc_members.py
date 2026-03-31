@@ -5,7 +5,7 @@ Given a conference name and year (for example, "ISSTA" and 2024), this script:
 2. Downloads and parses the HTML with BeautifulSoup.
 3. Finds the "Program Committee" panel/section.
 4. Extracts PC member names and affiliations.
-5. Updates person records through `people.py`.
+5. Updates person records through `data_store.py`.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup, Tag
 
-from people import PeopleStore
+from data_store import DataStore
 from web_search import search_research_track_pc_page
 
 logger = logging.getLogger(__name__)
@@ -482,7 +482,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     logger.info("Updating people store...")
-    store = PeopleStore()
+    store = DataStore()
     added_count, updated_count = store.update_many(
         build_people_updates(args.conference, args.year, members)
     )
