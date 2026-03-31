@@ -2118,4 +2118,4 @@ if __name__ == "__main__":
     if args.port < 1 or args.port > 65535:
         parser.error("--port must be between 1 and 65535")
 
-    app.run(debug=True, port=args.port)
+    app.run(debug=True, host="0.0.0.0", port=args.port)
