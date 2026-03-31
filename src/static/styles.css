@@ -392,7 +392,9 @@ button:hover {
 
 .person-link {
   display: grid;
-  gap: 0.2rem;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 0.5rem;
   text-decoration: none;
   color: inherit;
   border: 1px solid transparent;
@@ -404,6 +406,20 @@ button:hover {
 .person-link span {
   font-size: 0.88rem;
   opacity: 0.8;
+  white-space: nowrap;
+}
+
+.person-name,
+.person-meta-inline,
+.person-summary-inline {
+  white-space: nowrap;
+}
+
+.person-affiliation {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .person-meta-inline {

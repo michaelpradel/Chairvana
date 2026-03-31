@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import random
@@ -21,6 +22,14 @@ from llm_queries import DEFAULT_RESPONSES_MODEL
 from data_store import DataStore, RemoteConflictError
 from query_dblp import DblpQueryEngine, PACMPL_PREFIX, TARGET_VENUE_PREFIXES
 from sync_people_with_publications import sync_single_person_publications
+from web_ui_expertise_math import clean_embedding_vector as _clean_embedding_vector
+from web_ui_expertise_math import project_embeddings_2d as _project_embeddings_2d
+from web_ui_llm_usage import llm_usage_stats as _llm_usage_stats
+from web_ui_regions import normalize_region_name as _normalize_region_name
+from web_ui_regions import normalize_tag_query as _normalize_tag_query
+from web_ui_regions import region_for_person as _region_for_person
+from web_ui_regions import tagged_people_distribution as _compute_tagged_people_distribution
+from web_ui_regions import top_common_tags as _top_common_tags
 
 
 app = Flask(__name__)
@@ -38,27 +47,6 @@ _clean_status: dict[str, Any] = {
 
 _LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 
-# Pricing source: https://developers.openai.com/api/docs/pricing
-# Values are USD per 1M tokens.
-_MODEL_PRICING_PER_1M: dict[str, dict[str, float]] = {
-    "gpt-5-mini": {"input": 0.25, "output": 2.00, "cached_input": 0.025},
-    "gpt-5.4": {"input": 2.50, "output": 15.00},
-    "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
-    "gpt-5.4-nano": {"input": 0.20, "output": 1.25},
-    "gpt-5.4-pro": {"input": 30.00, "output": 180.00},
-}
-
-_MODEL_ALIASES: dict[str, str] = {
-    # Add aliases only when there is no explicit pricing entry.
-}
-
-_LOG_ENTRY_PATTERN = re.compile(
-    r"Time:\s*(?P<time>[^\n]+)\n"
-    r"Description:\s*(?P<description>[^\n]+)\n"
-    r"Tokens:\s*(?P<input>\d+)\s+input,\s*(?P<output>\d+)\s+output\s+\((?P<total>\d+)\s+total\)",
-    re.MULTILINE,
-)
-
 TOPIC_MIN_SIMILARITY = 0.22
 TOPIC_STRONG_SIMILARITY = 0.42
 TOPIC_TOOLTIP_NEIGHBOR_COUNT = 3
@@ -68,57 +56,6 @@ SORT_MODE_RANDOM = "random"
 SORT_MODE_ALPHA = "alpha"
 _VALID_SORT_MODES = {SORT_MODE_RANDOM, SORT_MODE_ALPHA}
 
-_GLOBAL_REGIONS = ["North America", "South America", "Europe", "Asia", "Africa"]
-
-# Keep the region set fixed to five buckets for the Distribution panel.
-# Oceania and Antarctica country codes are grouped into Asia and Africa, respectively.
-_REGION_COUNTRY_CODES: dict[str, set[str]] = {
-    "North America": {
-        "AIA", "ATG", "ABW", "BHS", "BRB", "BLZ", "BMU", "BES", "VGB", "CAN", "CYM", "CRI", "CUB",
-        "CUW", "DMA", "DOM", "SLV", "GRL", "GRD", "GLP", "GTM", "HTI", "HND", "JAM", "MTQ", "MEX",
-        "MSR", "NIC", "PAN", "PRI", "BLM", "KNA", "LCA", "MAF", "SPM", "VCT", "SXM", "TTO", "TCA",
-        "USA", "VIR", "UMI",
-    },
-    "South America": {
-        "ARG", "BOL", "BRA", "CHL", "COL", "ECU", "FLK", "GUF", "GUY", "PRY", "PER", "SGS", "SUR",
-        "URY", "VEN",
-    },
-    "Europe": {
-        "ALB", "AND", "AUT", "BLR", "BEL", "BIH", "BGR", "HRV", "CZE", "DNK", "EST", "FRO", "FIN",
-        "FRA", "DEU", "GIB", "GRC", "GGY", "VAT", "HUN", "ISL", "IRL", "IMN", "ITA", "JEY", "LVA",
-        "LIE", "LTU", "LUX", "MLT", "MDA", "MCO", "MNE", "NLD", "MKD", "NOR", "POL", "PRT", "ROU",
-        "RUS", "SMR", "SRB", "SVK", "SVN", "ESP", "SJM", "SWE", "CHE", "UKR", "GBR", "ALA",
-    },
-    "Asia": {
-        "AFG", "ARM", "AZE", "BHR", "BGD", "BTN", "BRN", "KHM", "CHN", "CXR", "CCK", "CYP", "GEO",
-        "HKG", "IND", "IDN", "IRN", "IRQ", "ISR", "JPN", "JOR", "KAZ", "KWT", "KGZ", "LAO", "LBN",
-        "MAC", "MYS", "MDV", "MNG", "MMR", "NPL", "PRK", "OMN", "PAK", "PSE", "PHL", "QAT", "SAU",
-        "SGP", "KOR", "LKA", "SYR", "TWN", "TJK", "THA", "TLS", "TUR", "TKM", "ARE", "UZB", "VNM",
-        "YEM", "IOT",
-        # Oceania grouped into Asia to keep the required five-region chart.
-        "ASM", "AUS", "COK", "FJI", "PYF", "GUM", "HMD", "KIR", "MHL", "FSM", "NRU", "NCL", "NZL",
-        "NIU", "NFK", "MNP", "PLW", "PNG", "PCN", "WSM", "SLB", "TKL", "TON", "TUV", "VUT", "WLF",
-    },
-    "Africa": {
-        "DZA", "AGO", "BEN", "BWA", "BFA", "BDI", "CPV", "CMR", "CAF", "TCD", "COM", "COG", "COD",
-        "CIV", "DJI", "EGY", "GNQ", "ERI", "SWZ", "ETH", "GAB", "GMB", "GHA", "GIN", "GNB", "KEN",
-        "LSO", "LBR", "LBY", "MDG", "MWI", "MLI", "MRT", "MUS", "MYT", "MAR", "MOZ", "NAM", "NER",
-        "NGA", "REU", "RWA", "SHN", "STP", "SEN", "SYC", "SLE", "SOM", "ZAF", "SSD", "SDN", "TZA",
-        "TGO", "TUN", "UGA", "ESH", "ZMB", "ZWE",
-        # Antarctica grouped into Africa to keep the required five-region chart.
-        "ATA",
-    },
-}
-
-COUNTRY_CODE_TO_REGION: dict[str, str] = {
-    country_code: region
-    for region, country_codes in _REGION_COUNTRY_CODES.items()
-    for country_code in country_codes
-}
-
-_NORMALIZED_REGION_NAMES: dict[str, str] = {
-    re.sub(r"\s+", " ", region).strip().casefold(): region for region in _GLOBAL_REGIONS
-}
 
 _dblp_engine_lock = threading.Lock()
 _dblp_engine: DblpQueryEngine | None = None
@@ -250,280 +187,9 @@ def _build_topic_tooltip(topic_similarity: float, nearest_papers: list[dict[str,
     return "\n".join(lines)
 
 
-def _normalize_tag_query(raw_tags: str) -> list[str]:
-    tokens = [token.strip() for token in raw_tags.replace(",", " ").split() if token.strip()]
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for token in tokens:
-        lowered = token.casefold()
-        if not lowered.startswith("#"):
-            lowered = f"#{lowered}"
-        if lowered == "#" or lowered in seen:
-            continue
-        seen.add(lowered)
-        normalized.append(lowered)
-    return normalized
-
-
-def _normalize_region_name(raw_region: str) -> str | None:
-    normalized = re.sub(r"\s+", " ", raw_region).strip().casefold()
-    if not normalized:
-        return None
-    return _NORMALIZED_REGION_NAMES.get(normalized)
-
-
-def _region_for_person(person: dict[str, Any]) -> str | None:
-    country = person.get("country")
-    if not isinstance(country, str) or not country.strip():
-        return None
-    return COUNTRY_CODE_TO_REGION.get(country.strip().upper())
-
-
-def _strip_model_date_suffix(model: str) -> str:
-    return re.sub(r"-\d{4}-\d{2}-\d{2}$", "", model)
-
-
-def _model_pricing(model: str) -> dict[str, Any]:
-    normalized_model = _strip_model_date_suffix(model)
-    direct_match_model = model if model in _MODEL_PRICING_PER_1M else normalized_model if normalized_model in _MODEL_PRICING_PER_1M else None
-    alias_model = _MODEL_ALIASES.get(model) or _MODEL_ALIASES.get(normalized_model)
-    resolved_model = direct_match_model or alias_model or normalized_model
-    pricing = _MODEL_PRICING_PER_1M.get(resolved_model)
-    pricing_mode = "exact" if direct_match_model else "estimated" if alias_model and pricing else "unknown"
-
-    return {
-        "requested_model": model,
-        "normalized_model": normalized_model,
-        "resolved_model": resolved_model,
-        "input_per_1m": pricing["input"] if pricing else None,
-        "output_per_1m": pricing["output"] if pricing else None,
-        "has_pricing": pricing is not None,
-        "is_aliased": bool(alias_model),
-        "pricing_mode": pricing_mode,
-        "pricing_source": "https://developers.openai.com/api/docs/pricing",
-    }
-
-
-def _parse_log_timestamp(raw_value: str) -> datetime | None:
-    value = raw_value.strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def _load_llm_usage_records() -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for log_file in sorted(_LOGS_DIR.glob("llm_*.log")):
-        try:
-            content = log_file.read_text(encoding="utf-8")
-        except OSError:
-            continue
-
-        for match in _LOG_ENTRY_PATTERN.finditer(content):
-            timestamp = _parse_log_timestamp(match.group("time"))
-            input_tokens = int(match.group("input"))
-            output_tokens = int(match.group("output"))
-            total_tokens = int(match.group("total"))
-            records.append(
-                {
-                    "timestamp": timestamp,
-                    "timestamp_raw": match.group("time").strip(),
-                    "description": match.group("description").strip(),
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "total_tokens": total_tokens,
-                    "source_file": log_file.name,
-                }
-            )
-
-    records.sort(
-        key=lambda record: (
-            record["timestamp"] is None,
-            record["timestamp"] or datetime.min,
-            record["source_file"],
-        )
-    )
-    return records
-
-
-def _compute_token_cost(input_tokens: int, output_tokens: int, pricing: dict[str, Any]) -> float | None:
-    input_rate = pricing.get("input_per_1m")
-    output_rate = pricing.get("output_per_1m")
-    if input_rate is None or output_rate is None:
-        return None
-    return (input_tokens / 1_000_000.0) * input_rate + (output_tokens / 1_000_000.0) * output_rate
-
-
-def _llm_usage_stats(model: str) -> dict[str, Any]:
-    pricing = _model_pricing(model)
-    records = _load_llm_usage_records()
-
-    totals = {
-        "calls": len(records),
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "total_tokens": 0,
-        "cost_usd": 0.0,
-        "cost_available": pricing["has_pricing"],
-    }
-
-    timeline_labels: list[str] = []
-    timeline_input: list[int] = []
-    timeline_output: list[int] = []
-    timeline_total: list[int] = []
-    timeline_cost_cumulative: list[float] = []
-
-    grouped: dict[str, dict[str, Any]] = {}
-
-    cumulative_cost = 0.0
-    for record in records:
-        input_tokens = record["input_tokens"]
-        output_tokens = record["output_tokens"]
-        total_tokens = record["total_tokens"]
-
-        totals["input_tokens"] += input_tokens
-        totals["output_tokens"] += output_tokens
-        totals["total_tokens"] += total_tokens
-
-        label = (
-            record["timestamp"].strftime("%Y-%m-%d %H:%M")
-            if record["timestamp"] is not None
-            else record["timestamp_raw"]
-        )
-        timeline_labels.append(label)
-        timeline_input.append(input_tokens)
-        timeline_output.append(output_tokens)
-        timeline_total.append(total_tokens)
-
-        call_cost = _compute_token_cost(input_tokens, output_tokens, pricing)
-        if call_cost is not None:
-            cumulative_cost += call_cost
-        timeline_cost_cumulative.append(round(cumulative_cost, 2))
-
-        description = record["description"] or "(no description)"
-        bucket = grouped.setdefault(
-            description,
-            {
-                "description": description,
-                "calls": 0,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "total_tokens": 0,
-                "cost_usd": 0.0,
-                "cost_available": pricing["has_pricing"],
-            },
-        )
-        bucket["calls"] += 1
-        bucket["input_tokens"] += input_tokens
-        bucket["output_tokens"] += output_tokens
-        bucket["total_tokens"] += total_tokens
-        if call_cost is not None:
-            bucket["cost_usd"] += call_cost
-
-    if pricing["has_pricing"]:
-        totals["cost_usd"] = round(cumulative_cost, 2)
-
-    grouped_rows = sorted(grouped.values(), key=lambda row: row["total_tokens"], reverse=True)
-    for row in grouped_rows:
-        row["cost_usd"] = round(row["cost_usd"], 2)
-
-    return {
-        "pricing": pricing,
-        "totals": totals,
-        "timeline": {
-            "labels": timeline_labels,
-            "input_tokens": timeline_input,
-            "output_tokens": timeline_output,
-            "total_tokens": timeline_total,
-            "cost_cumulative_usd": timeline_cost_cumulative,
-        },
-        "grouped_by_description": grouped_rows,
-        "records": records,
-    }
-
-
 def _tagged_people_distribution(commit: str | None, tag_query: str) -> dict[str, Any]:
-    selected_tags = _normalize_tag_query(tag_query)
     all_people = store.list_people(commit=commit)
-
-    if not selected_tags:
-        # No tag given: show distribution of the entire set of people
-        matched_people = all_people
-    else:
-        matched_people = []
-        for person in all_people:
-            flags = person.get("flags")
-            if not isinstance(flags, list):
-                continue
-            normalized_flags = {
-                str(flag).strip().casefold() for flag in flags if isinstance(flag, str) and str(flag).strip()
-            }
-            if any(tag in normalized_flags for tag in selected_tags):
-                matched_people.append(person)
-
-    gender_counter: Counter[str] = Counter()
-    country_counter: Counter[str] = Counter()
-    region_counter: Counter[str] = Counter()
-
-    for person in matched_people:
-        gender = person.get("gender")
-        if isinstance(gender, str) and gender.strip():
-            gender_counter[gender.strip().casefold()] += 1
-        else:
-            gender_counter["unknown"] += 1
-
-        country = person.get("country")
-        if isinstance(country, str) and country.strip():
-            normalized_country = country.strip().upper()
-            country_counter[normalized_country] += 1
-            region = _region_for_person(person)
-            if region is not None:
-                region_counter[region] += 1
-        else:
-            country_counter["UNKNOWN"] += 1
-
-    return {
-        "input": " ".join(selected_tags),
-        "selected_tags": selected_tags,
-        "matched_count": len(matched_people),
-        "gender": dict(gender_counter.most_common()),
-        "country": dict(country_counter.most_common(12)),
-        "region": {
-            region: region_counter[region]
-            for region in _GLOBAL_REGIONS
-            if region_counter[region] > 0
-        },
-    }
-
-
-def _top_common_tags(people: list[dict[str, Any]], limit: int = 5) -> list[str]:
-    tag_counter: Counter[str] = Counter()
-
-    for person in people:
-        flags = person.get("flags")
-        if not isinstance(flags, list):
-            continue
-
-        # Count each tag at most once per person to avoid skew from duplicates.
-        unique_tags_for_person: set[str] = set()
-        for flag in flags:
-            if not isinstance(flag, str):
-                continue
-            normalized = flag.strip().casefold()
-            if not normalized:
-                continue
-            if not normalized.startswith("#"):
-                normalized = f"#{normalized}"
-            if normalized == "#":
-                continue
-            unique_tags_for_person.add(normalized)
-
-        tag_counter.update(unique_tags_for_person)
-
-    return [tag for tag, _ in tag_counter.most_common(limit)]
+    return _compute_tagged_people_distribution(all_people, tag_query)
 
 
 def _parse_search_query(query: str) -> dict[str, Any]:
@@ -630,133 +296,6 @@ def _matches_tag_filter(person: dict[str, Any], selected_tags: list[str]) -> boo
         str(flag).strip().casefold() for flag in flags if isinstance(flag, str) and str(flag).strip()
     }
     return any(tag in normalized_flags for tag in selected_tags)
-
-
-def _clean_embedding_vector(raw_embedding: Any) -> list[float] | None:
-    if not isinstance(raw_embedding, list) or len(raw_embedding) < 2:
-        return None
-
-    vector: list[float] = []
-    for value in raw_embedding:
-        if not isinstance(value, (int, float)):
-            return None
-        numeric_value = float(value)
-        if not math.isfinite(numeric_value):
-            return None
-        vector.append(numeric_value)
-    return vector
-
-
-def _dot(lhs: list[float], rhs: list[float]) -> float:
-    return sum(a * b for a, b in zip(lhs, rhs, strict=True))
-
-
-def _vector_norm(vector: list[float]) -> float:
-    return math.sqrt(sum(value * value for value in vector))
-
-
-def _normalize_vector(vector: list[float]) -> list[float] | None:
-    norm = _vector_norm(vector)
-    if norm <= 1e-12:
-        return None
-    return [value / norm for value in vector]
-
-
-def _matvec_cov(centered_vectors: list[list[float]], vector: list[float]) -> list[float]:
-    sample_count = len(centered_vectors)
-    if sample_count <= 1:
-        return [0.0 for _ in vector]
-
-    scalar_projections = [_dot(row, vector) for row in centered_vectors]
-    result = [0.0 for _ in vector]
-    for row, projection in zip(centered_vectors, scalar_projections, strict=True):
-        for index, value in enumerate(row):
-            result[index] += projection * value
-
-    scale = 1.0 / (sample_count - 1)
-    return [value * scale for value in result]
-
-
-def _principal_component(
-    centered_vectors: list[list[float]],
-    basis_vectors: list[list[float]],
-    max_iterations: int = 12,
-) -> list[float] | None:
-    if not centered_vectors:
-        return None
-
-    dimension = len(centered_vectors[0])
-    candidate = centered_vectors[0][:]
-    if _vector_norm(candidate) <= 1e-12:
-        candidate = [1.0 for _ in range(dimension)]
-
-    for base in basis_vectors:
-        projection = _dot(candidate, base)
-        candidate = [value - projection * base_value for value, base_value in zip(candidate, base, strict=True)]
-
-    normalized_candidate = _normalize_vector(candidate)
-    if normalized_candidate is None:
-        return None
-
-    candidate = normalized_candidate
-    for _ in range(max_iterations):
-        next_candidate = _matvec_cov(centered_vectors, candidate)
-        for base in basis_vectors:
-            projection = _dot(next_candidate, base)
-            next_candidate = [
-                value - projection * base_value
-                for value, base_value in zip(next_candidate, base, strict=True)
-            ]
-
-        normalized_next = _normalize_vector(next_candidate)
-        if normalized_next is None:
-            return None
-
-        delta = _vector_norm([
-            a - b for a, b in zip(normalized_next, candidate, strict=True)
-        ])
-        candidate = normalized_next
-        if delta <= 1e-6:
-            break
-
-    return candidate
-
-
-def _project_embeddings_2d(embeddings: list[list[float]]) -> list[tuple[float, float]]:
-    if not embeddings:
-        return []
-    if len(embeddings) == 1:
-        return [(0.0, 0.0)]
-
-    dimension = len(embeddings[0])
-    means = [0.0 for _ in range(dimension)]
-    for vector in embeddings:
-        for index, value in enumerate(vector):
-            means[index] += value
-    sample_count = len(embeddings)
-    means = [value / sample_count for value in means]
-
-    centered = [[value - means[index] for index, value in enumerate(vector)] for vector in embeddings]
-
-    first_component = _principal_component(centered, basis_vectors=[])
-    if first_component is None:
-        return [(0.0, 0.0) for _ in embeddings]
-
-    second_component = _principal_component(centered, basis_vectors=[first_component])
-    if second_component is None:
-        second_component = [0.0 for _ in range(dimension)]
-        if dimension > 1:
-            second_component[1] = 1.0
-
-    xs = [_dot(vector, first_component) for vector in centered]
-    ys = [_dot(vector, second_component) for vector in centered]
-
-    x_scale = max((abs(value) for value in xs), default=1.0)
-    y_scale = max((abs(value) for value in ys), default=1.0)
-    x_scale = x_scale if x_scale > 1e-9 else 1.0
-    y_scale = y_scale if y_scale > 1e-9 else 1.0
-
-    return [(x / x_scale, y / y_scale) for x, y in zip(xs, ys, strict=True)]
 
 
 def _matches_search_filters(person: dict[str, Any], filters: dict[str, Any]) -> bool:
@@ -872,21 +411,29 @@ def _normalize_sort_mode(raw_sort_mode: str) -> str:
     return SORT_MODE_RANDOM
 
 
-def _sorted_people(people: list[dict[str, Any]], sort_mode: str) -> list[dict[str, Any]]:
+def _deterministic_random_seed(query: str, commit: str | None) -> int:
+    seed_material = f"{query.strip().casefold()}|{commit or 'HEAD'}"
+    digest = hashlib.sha256(seed_material.encode("utf-8")).hexdigest()
+    return int(digest[:16], 16)
+
+
+def _sorted_people(people: list[dict[str, Any]], sort_mode: str, random_seed: int | None = None) -> list[dict[str, Any]]:
     if sort_mode == SORT_MODE_ALPHA:
         return sorted(people, key=lambda person: str(person.get("name", "")).casefold())
 
     shuffled_people = list(people)
-    random.shuffle(shuffled_people)
+    rng = random.Random(random_seed)
+    rng.shuffle(shuffled_people)
     return shuffled_people
 
 
 def _filtered_people(query: str, sort_mode: str, commit: str | None = None) -> tuple[list[dict[str, Any]], int]:
     people = store.list_people(commit=commit)
     total_count = len(people)
+    random_seed = _deterministic_random_seed(query, commit)
 
     if not query.strip():
-        return _sorted_people(people, sort_mode), total_count
+        return _sorted_people(people, sort_mode, random_seed), total_count
 
     filters = _parse_search_query(query)
 
@@ -980,11 +527,12 @@ def _filtered_people(query: str, sort_mode: str, commit: str | None = None) -> t
                     str(person.get("name", "")).casefold(),
                 )
             )
-            filtered = semantic_matches
+            # Already sorted by similarity; skip the generic sort.
+            return semantic_matches, total_count
         else:
             filtered = []
 
-    return _sorted_people(filtered, sort_mode), total_count
+    return _sorted_people(filtered, sort_mode, random_seed), total_count
 
 
 def _publication_display_counts(person: dict[str, Any] | None) -> list[tuple[str, int]]:
@@ -1056,6 +604,53 @@ def _enrich_people_for_search_list(people: list[dict[str, Any]]) -> list[dict[st
         enriched_person["_prior_pc_count"] = _person_prior_pc_count(person)
         enriched_people.append(enriched_person)
     return enriched_people
+
+
+def _index_request_params(values: Any) -> dict[str, str | bool]:
+    dist_tags = values.get("dist_tags", "#invite").strip()
+    return {
+        "query": values.get("q", ""),
+        "sort_mode": _normalize_sort_mode(values.get("sort", SORT_MODE_RANDOM)),
+        "selected_name": values.get("selected", "").strip(),
+        "add_person_mode": values.get("add_person", "").strip().casefold() in {"1", "true", "yes"},
+        "requested_history": values.get("history", "").strip(),
+        "dist_tags": dist_tags,
+        "expertise_tags": values.get("expertise_tags", dist_tags).strip(),
+        "expertise_add": values.get("expertise_add", "").strip(),
+        "gap_tag": values.get("gap_tag", "#invite").strip() or "#invite",
+        "gap_year_start": values.get("gap_year_start", "2024").strip() or "2024",
+        "gap_year_end": values.get("gap_year_end", "2026").strip() or "2026",
+        "gap_min_similarity": values.get("gap_min_similarity", "0.7").strip() or "0.7",
+    }
+
+
+def _index_redirect_params(
+    *,
+    query: str,
+    sort_mode: str,
+    dist_tags: str,
+    expertise_tags: str,
+    expertise_add: str,
+    selected: str | None = None,
+    selected_name: str | None = None,
+    history_commit: str | None = None,
+    add_person: bool = False,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "q": query,
+        "sort": sort_mode,
+        "dist_tags": dist_tags,
+        "expertise_tags": expertise_tags,
+        "expertise_add": expertise_add,
+    }
+    resolved_selected = selected or selected_name
+    if resolved_selected:
+        params["selected"] = resolved_selected
+    if history_commit:
+        params["history"] = history_commit
+    if add_person:
+        params["add_person"] = 1
+    return params
 
 
 def _build_index_context(
@@ -1139,64 +734,42 @@ def _build_index_context(
 
 @app.get("/")
 def index() -> str:
-    query = request.args.get("q", "")
-    sort_mode = _normalize_sort_mode(request.args.get("sort", SORT_MODE_RANDOM))
-    selected_name = request.args.get("selected", "").strip()
-    add_person_mode = request.args.get("add_person", "").strip().casefold() in {"1", "true", "yes"}
-    requested_history = request.args.get("history", "").strip()
-    dist_tags = request.args.get("dist_tags", "#invite").strip()
-    expertise_tags = request.args.get("expertise_tags", dist_tags).strip()
-    expertise_add = request.args.get("expertise_add", "").strip()
-    gap_tag = request.args.get("gap_tag", "#invite").strip() or "#invite"
-    gap_year_start = request.args.get("gap_year_start", "2024").strip() or "2024"
-    gap_year_end = request.args.get("gap_year_end", "2026").strip() or "2026"
-    gap_min_similarity = request.args.get("gap_min_similarity", "0.7").strip() or "0.7"
+    params = _index_request_params(request.args)
 
     context = _build_index_context(
-        query=query,
-        sort_mode=sort_mode,
-        selected_name=selected_name,
-        add_person_mode=add_person_mode,
-        requested_history=requested_history,
-        dist_tags=dist_tags,
-        expertise_tags=expertise_tags,
-        expertise_add=expertise_add,
-        gap_tag=gap_tag,
-        gap_year_start=gap_year_start,
-        gap_year_end=gap_year_end,
-        gap_min_similarity=gap_min_similarity,
+        query=str(params["query"]),
+        sort_mode=str(params["sort_mode"]),
+        selected_name=str(params["selected_name"]),
+        add_person_mode=bool(params["add_person_mode"]),
+        requested_history=str(params["requested_history"]),
+        dist_tags=str(params["dist_tags"]),
+        expertise_tags=str(params["expertise_tags"]),
+        expertise_add=str(params["expertise_add"]),
+        gap_tag=str(params["gap_tag"]),
+        gap_year_start=str(params["gap_year_start"]),
+        gap_year_end=str(params["gap_year_end"]),
+        gap_min_similarity=str(params["gap_min_similarity"]),
     )
     return render_template("index.html", **context)
 
 
 @app.get("/api/panels")
 def panels_data() -> Any:
-    query = request.args.get("q", "")
-    sort_mode = _normalize_sort_mode(request.args.get("sort", SORT_MODE_RANDOM))
-    selected_name = request.args.get("selected", "").strip()
-    add_person_mode = request.args.get("add_person", "").strip().casefold() in {"1", "true", "yes"}
-    requested_history = request.args.get("history", "").strip()
-    dist_tags = request.args.get("dist_tags", "#invite").strip()
-    expertise_tags = request.args.get("expertise_tags", dist_tags).strip()
-    expertise_add = request.args.get("expertise_add", "").strip()
-    gap_tag = request.args.get("gap_tag", "#invite").strip() or "#invite"
-    gap_year_start = request.args.get("gap_year_start", "2024").strip() or "2024"
-    gap_year_end = request.args.get("gap_year_end", "2026").strip() or "2026"
-    gap_min_similarity = request.args.get("gap_min_similarity", "0.7").strip() or "0.7"
+    params = _index_request_params(request.args)
 
     context = _build_index_context(
-        query=query,
-        sort_mode=sort_mode,
-        selected_name=selected_name,
-        add_person_mode=add_person_mode,
-        requested_history=requested_history,
-        dist_tags=dist_tags,
-        expertise_tags=expertise_tags,
-        expertise_add=expertise_add,
-        gap_tag=gap_tag,
-        gap_year_start=gap_year_start,
-        gap_year_end=gap_year_end,
-        gap_min_similarity=gap_min_similarity,
+        query=str(params["query"]),
+        sort_mode=str(params["sort_mode"]),
+        selected_name=str(params["selected_name"]),
+        add_person_mode=bool(params["add_person_mode"]),
+        requested_history=str(params["requested_history"]),
+        dist_tags=str(params["dist_tags"]),
+        expertise_tags=str(params["expertise_tags"]),
+        expertise_add=str(params["expertise_add"]),
+        gap_tag=str(params["gap_tag"]),
+        gap_year_start=str(params["gap_year_start"]),
+        gap_year_end=str(params["gap_year_end"]),
+        gap_min_similarity=str(params["gap_min_similarity"]),
     )
 
     return jsonify(
@@ -1222,34 +795,18 @@ def add_tag_to_filtered_people() -> Any:
     normalized_tags = _normalize_tag_query(raw_bulk_tag)
     if len(normalized_tags) != 1:
         flash("Please provide exactly one tag (for example: #invite).", "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                selected=selected_name,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, selected_name=selected_name,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     with _clean_lock:
         if _clean_status["running"]:
             flash("Cannot apply tags while affiliation cleaning is in progress.", "error")
-            return redirect(
-                url_for(
-                    "index",
-                    q=query,
-                    sort=sort_mode,
-                    selected=selected_name,
-                    history=history_commit,
-                    dist_tags=dist_tags,
-                    expertise_tags=expertise_tags,
-                    expertise_add=expertise_add,
-                )
-            )
+            return redirect(url_for("index", **_index_redirect_params(
+                query=query, sort_mode=sort_mode, selected_name=selected_name,
+                history_commit=history_commit, dist_tags=dist_tags,
+                expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     filtered_people, _ = _filtered_people(query, sort_mode, history_commit)
     filtered_names = [
@@ -1261,18 +818,10 @@ def add_tag_to_filtered_people() -> Any:
 
     if not filtered_names:
         flash("No people match the current filter; no tags were added.", "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                selected=selected_name,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, selected_name=selected_name,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     tag = normalized_tags[0]
     updates = [{"name": name, "flags": [tag]} for name in filtered_names]
@@ -1281,45 +830,21 @@ def add_tag_to_filtered_people() -> Any:
         _, updated_count = store.update_many(updates, base_commit=history_commit)
     except RemoteConflictError as exc:
         flash(str(exc), "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                selected=selected_name,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, selected_name=selected_name,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
     except ValueError as exc:
         flash(str(exc), "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                selected=selected_name,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, selected_name=selected_name,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     flash(f"Added {tag} to {updated_count} people from the current list.", "success")
-    return redirect(
-        url_for(
-            "index",
-            q=query,
-            sort=sort_mode,
-            selected=selected_name,
-            dist_tags=dist_tags,
-            expertise_tags=expertise_tags,
-            expertise_add=expertise_add,
-        )
-    )
+    return redirect(url_for("index", **_index_redirect_params(
+        query=query, sort_mode=sort_mode, selected_name=selected_name,
+        dist_tags=dist_tags, expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
 
 @app.get("/api/distribution")
@@ -1356,49 +881,25 @@ def create_person() -> Any:
         normalized_country = _normalize_country_code(new_country)
     except ValueError as exc:
         flash(str(exc), "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                add_person=1,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, add_person=1,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     if not new_name:
         flash("Name is required for new people.", "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                add_person=1,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, add_person=1,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     with _clean_lock:
         if _clean_status["running"]:
             flash("Cannot create: affiliation cleaning is in progress.", "error")
-            return redirect(
-                url_for(
-                    "index",
-                    q=query,
-                    sort=sort_mode,
-                    add_person=1,
-                    history=history_commit,
-                    dist_tags=dist_tags,
-                    expertise_tags=expertise_tags,
-                    expertise_add=expertise_add,
-                )
-            )
+            return redirect(url_for("index", **_index_redirect_params(
+                query=query, sort_mode=sort_mode, add_person=1,
+                history_commit=history_commit, dist_tags=dist_tags,
+                expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     existing_people = store.list_people(commit=history_commit)
     existing_names_casefold = {
@@ -1409,18 +910,10 @@ def create_person() -> Any:
     }
     if new_name.casefold() in existing_names_casefold:
         flash(f"A person with name '{new_name}' already exists.", "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                add_person=1,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, add_person=1,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     try:
         is_new, created = store.add_person(
@@ -1436,60 +929,28 @@ def create_person() -> Any:
         )
     except RemoteConflictError as exc:
         flash(str(exc), "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                add_person=1,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, add_person=1,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
     except ValueError as exc:
         flash(str(exc), "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                add_person=1,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, add_person=1,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     if not is_new:
         flash(f"A person with name '{new_name}' already exists.", "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                add_person=1,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, add_person=1,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     flash("Person added successfully.", "success")
-    return redirect(
-        url_for(
-            "index",
-            q=query,
-            sort=sort_mode,
-            selected=created["name"],
-            dist_tags=dist_tags,
-            expertise_tags=expertise_tags,
-            expertise_add=expertise_add,
-        )
-    )
+    return redirect(url_for("index", **_index_redirect_params(
+        query=query, sort_mode=sort_mode, selected_name=created["name"],
+        dist_tags=dist_tags, expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
 
 @app.get("/api/expertise")
@@ -1716,52 +1177,28 @@ def update_person() -> Any:
         if _request_wants_json():
             return jsonify({"error": str(exc)}), 400
         flash(str(exc), "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                selected=original_name,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, selected_name=original_name,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     if not original_name:
         if _request_wants_json():
             return jsonify({"error": "Missing original person name."}), 400
         flash("Missing original person name.", "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, history_commit=history_commit,
+            dist_tags=dist_tags, expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     with _clean_lock:
         if _clean_status["running"]:
             if _request_wants_json():
                 return jsonify({"error": "Cannot save: affiliation cleaning is in progress."}), 409
             flash("Cannot save: affiliation cleaning is in progress.", "error")
-            return redirect(
-                url_for(
-                    "index",
-                    q=query,
-                    sort=sort_mode,
-                    selected=original_name,
-                    history=history_commit,
-                    dist_tags=dist_tags,
-                    expertise_tags=expertise_tags,
-                    expertise_add=expertise_add,
-                )
-            )
+            return redirect(url_for("index", **_index_redirect_params(
+                query=query, sort_mode=sort_mode, selected_name=original_name,
+                history_commit=history_commit, dist_tags=dist_tags,
+                expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     try:
         updates: dict[str, Any] = {
@@ -1781,34 +1218,18 @@ def update_person() -> Any:
         if _request_wants_json():
             return jsonify({"error": str(exc), "conflict": True}), 409
         flash(str(exc), "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                selected=original_name,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, selected_name=original_name,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
     except ValueError as exc:
         if _request_wants_json():
             return jsonify({"error": str(exc)}), 400
         flash(str(exc), "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                selected=original_name,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, selected_name=original_name,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     if _request_wants_json():
         return jsonify(
@@ -1822,17 +1243,9 @@ def update_person() -> Any:
         )
 
     flash("Person updated successfully.", "success")
-    return redirect(
-        url_for(
-            "index",
-            q=query,
-            sort=sort_mode,
-            selected=updated["name"],
-            dist_tags=dist_tags,
-            expertise_tags=expertise_tags,
-            expertise_add=expertise_add,
-        )
-    )
+    return redirect(url_for("index", **_index_redirect_params(
+        query=query, sort_mode=sort_mode, selected_name=updated["name"],
+        dist_tags=dist_tags, expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
 
 @app.post("/person/clean")
@@ -1847,33 +1260,17 @@ def clean_person() -> Any:
 
     if not original_name:
         flash("No person selected.", "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, history_commit=history_commit,
+            dist_tags=dist_tags, expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     with _clean_lock:
         if _clean_status["running"]:
             flash("Cleaning is already in progress.", "error")
-            return redirect(
-                url_for(
-                    "index",
-                    q=query,
-                    sort=sort_mode,
-                    selected=original_name,
-                    history=history_commit,
-                    dist_tags=dist_tags,
-                    expertise_tags=expertise_tags,
-                    expertise_add=expertise_add,
-                )
-            )
+            return redirect(url_for("index", **_index_redirect_params(
+                query=query, sort_mode=sort_mode, selected_name=original_name,
+                history_commit=history_commit, dist_tags=dist_tags,
+                expertise_tags=expertise_tags, expertise_add=expertise_add)))
         _clean_status.update({"running": True, "error": None, "changed": False, "result_name": None})
 
     def _run() -> None:
@@ -1895,18 +1292,10 @@ def clean_person() -> Any:
                 _clean_status["running"] = False
 
     threading.Thread(target=_run, daemon=True).start()
-    return redirect(
-        url_for(
-            "index",
-            q=query,
-            sort=sort_mode,
-            selected=original_name,
-            history=history_commit,
-            dist_tags=dist_tags,
-            expertise_tags=expertise_tags,
-            expertise_add=expertise_add,
-        )
-    )
+    return redirect(url_for("index", **_index_redirect_params(
+        query=query, sort_mode=sort_mode, selected_name=original_name,
+        history_commit=history_commit, dist_tags=dist_tags,
+        expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
 
 @app.get("/person/clean/status")
@@ -1917,7 +1306,7 @@ def get_clean_status() -> Any:
 
 @app.get("/llm-usage")
 def llm_usage() -> str:
-    stats = _llm_usage_stats(DEFAULT_RESPONSES_MODEL)
+    stats = _llm_usage_stats(DEFAULT_RESPONSES_MODEL, _LOGS_DIR)
     return render_template(
         "llm_usage.html",
         model=DEFAULT_RESPONSES_MODEL,
@@ -1937,33 +1326,17 @@ def delete_person() -> Any:
 
     if not original_name:
         flash("No person selected.", "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, history_commit=history_commit,
+            dist_tags=dist_tags, expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     with _clean_lock:
         if _clean_status["running"]:
             flash("Cannot delete: affiliation cleaning is in progress.", "error")
-            return redirect(
-                url_for(
-                    "index",
-                    q=query,
-                    sort=sort_mode,
-                    selected=original_name,
-                    history=history_commit,
-                    dist_tags=dist_tags,
-                    expertise_tags=expertise_tags,
-                    expertise_add=expertise_add,
-                )
-            )
+            return redirect(url_for("index", **_index_redirect_params(
+                query=query, sort_mode=sort_mode, selected_name=original_name,
+                history_commit=history_commit, dist_tags=dist_tags,
+                expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     try:
         store.delete_person(
@@ -1972,44 +1345,21 @@ def delete_person() -> Any:
         )
     except RemoteConflictError as exc:
         flash(str(exc), "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                selected=original_name,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, selected_name=original_name,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
     except ValueError as exc:
         flash(str(exc), "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                selected=original_name,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, selected_name=original_name,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     flash(f"Person '{original_name}' deleted successfully.", "success")
-    return redirect(
-        url_for(
-            "index",
-            q=query,
-            sort=sort_mode,
-            dist_tags=dist_tags,
-            expertise_tags=expertise_tags,
-            expertise_add=expertise_add,
-        )
-    )
+    return redirect(url_for("index", **_index_redirect_params(
+        query=query, sort_mode=sort_mode, dist_tags=dist_tags,
+        expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
 
 @app.post("/person/sync-publications")
@@ -2024,33 +1374,17 @@ def sync_person_publications() -> Any:
 
     if not original_name:
         flash("No person selected.", "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, history_commit=history_commit,
+            dist_tags=dist_tags, expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     with _clean_lock:
         if _clean_status["running"]:
             flash("Cannot auto-complete publications: affiliation cleaning is in progress.", "error")
-            return redirect(
-                url_for(
-                    "index",
-                    q=query,
-                    sort=sort_mode,
-                    selected=original_name,
-                    history=history_commit,
-                    dist_tags=dist_tags,
-                    expertise_tags=expertise_tags,
-                    expertise_add=expertise_add,
-                )
-            )
+            return redirect(url_for("index", **_index_redirect_params(
+                query=query, sort_mode=sort_mode, selected_name=original_name,
+                history_commit=history_commit, dist_tags=dist_tags,
+                expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     try:
         changed, summary = sync_single_person_publications(
@@ -2059,32 +1393,16 @@ def sync_person_publications() -> Any:
         )
     except ValueError as exc:
         flash(str(exc), "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                selected=original_name,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, selected_name=original_name,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
     except Exception as exc:  # noqa: BLE001
         flash(f"Failed to auto-complete publications: {exc}", "error")
-        return redirect(
-            url_for(
-                "index",
-                q=query,
-                sort=sort_mode,
-                selected=original_name,
-                history=history_commit,
-                dist_tags=dist_tags,
-                expertise_tags=expertise_tags,
-                expertise_add=expertise_add,
-            )
-        )
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, selected_name=original_name,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
     if summary is None:
         flash("No target-venue publications found for this person.", "error")
@@ -2093,17 +1411,9 @@ def sync_person_publications() -> Any:
     else:
         flash("Publication summary already up to date.", "success")
 
-    return redirect(
-        url_for(
-            "index",
-            q=query,
-            sort=sort_mode,
-            selected=original_name,
-            dist_tags=dist_tags,
-            expertise_tags=expertise_tags,
-            expertise_add=expertise_add,
-        )
-    )
+    return redirect(url_for("index", **_index_redirect_params(
+        query=query, sort_mode=sort_mode, selected_name=original_name,
+        dist_tags=dist_tags, expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
 
 if __name__ == "__main__":

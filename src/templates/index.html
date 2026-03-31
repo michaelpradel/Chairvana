@@ -745,8 +745,7 @@
       }
 
       var nameEl = activeLink.querySelector('strong');
-      var spanEls = activeLink.querySelectorAll('span');
-      var affiliationEl = spanEls.length > 0 ? spanEls[0] : null;
+      var affiliationEl = activeLink.querySelector('.person-affiliation');
       var metaEl = activeLink.querySelector('.person-meta-inline');
 
       if (nameEl) {

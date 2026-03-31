@@ -23,7 +23,7 @@
       id="q" 
       name="q" 
       value="{{ query }}" 
-      placeholder="e.g., Europe t:testing pubs>5"
+      placeholder="e.g., region:Europe t:testing pubs>5"
       title="Supported filters: text, -#tag, male/female, gender:unknown, country:USA, region:Europe, affiliation:unknown, pubs>N, pcs>N, t:topic"
     />
     <div class="sort-controls" aria-label="Sort people list">
@@ -98,8 +98,8 @@
         title="{{ person.get('_topic_tooltip') }}"
         {% endif %}
       >
-        <strong>{{ person['name'] }}</strong>
-        <span>{{ person.get('affiliation') or 'Unknown affiliation' }}</span>
+        <strong class="person-name">{{ person['name'] }}</strong>
+        <span class="person-affiliation">{{ person.get('affiliation') or 'Unknown affiliation' }}</span>
         <span class="person-meta-inline">
           {{ person.get('gender', 'unknown') }}
           {% if person.get('country') %}
@@ -110,7 +110,7 @@
           {% endif %}
         </span>
         <span class="person-summary-inline">
-          {{ person.get('_publication_count', 0) }} publications · {{ person.get('_prior_pc_count', 0) }} prior PCs
+          {{ person.get('_publication_count', 0) }} pubs · {{ person.get('_prior_pc_count', 0) }} PCs
         </span>
       </a>
     </li>
