@@ -355,31 +355,6 @@ button:hover {
   box-shadow: 0 1px 2px rgba(14, 106, 97, 0.2);
 }
 
-.bulk-tag-form {
-  display: grid;
-  gap: 0.42rem;
-  margin-bottom: 0.85rem;
-  padding: 0.56rem;
-  border: 1px dashed rgba(84, 62, 44, 0.28);
-  border-radius: 0.62rem;
-  background: rgba(255, 255, 255, 0.48);
-}
-
-.bulk-tag-row {
-  display: flex;
-  gap: 0.45rem;
-  align-items: center;
-}
-
-.bulk-tag-row input {
-  min-width: 0;
-  flex: 1 1 180px;
-}
-
-.bulk-tag-row button {
-  flex: 0 0 auto;
-}
-
 .person-list {
   list-style: none;
   margin: 0;
@@ -438,9 +413,139 @@ button:hover {
   background: rgba(201, 235, 230, 0.65);
 }
 
+/* Person selection */
+.person-list li {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.person-select-dot {
+  flex-shrink: 0;
+  width: 1.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 0.5rem 0 0 0.5rem;
+  background: transparent;
+  transition: background 100ms ease;
+}
+
+.person-select-dot::before {
+  content: '';
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  border: 1.5px solid rgba(84, 62, 44, 0.35);
+  background: transparent;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+
+.person-select-dot:hover::before {
+  border-color: var(--accent);
+}
+
+.person-list li.marked .person-select-dot::before {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.person-list li.marked .person-link {
+  background: rgba(201, 235, 230, 0.45);
+  border-color: rgba(14, 106, 97, 0.3);
+}
+
+.person-list li .person-link {
+  flex: 1;
+  min-width: 0;
+  border-radius: 0 0.6rem 0.6rem 0;
+}
+
+/* Marked-actions bar */
+.marked-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  background: rgba(201, 235, 230, 0.55);
+  border: 1px solid rgba(14, 106, 97, 0.3);
+  border-radius: 0.65rem;
+}
+
+.marked-count {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.marked-clear-btn {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid rgba(84, 62, 44, 0.3);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.marked-clear-btn:hover {
+  filter: brightness(0.95);
+}
+
+.marked-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  margin-left: auto;
+}
+
+.marked-tag-input {
+  font-size: 0.88rem;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 0.45rem;
+  background: rgba(255, 255, 255, 0.85);
+  width: 7rem;
+}
+
+.marked-tag-btn {
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 0.28rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid rgba(14, 106, 97, 0.45);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.marked-tag-btn:hover {
+  filter: brightness(1.1);
+}
+
+.marked-tag-btn--remove {
+  background: var(--danger);
+  border-color: rgba(143, 45, 45, 0.45);
+}
+
+
 .editor {
   display: grid;
   gap: 0.52rem;
+}
+
+.editor label {
+  display: block;
+}
+
+.editor input {
+  width: 100%;
 }
 
 .field-note {
@@ -987,13 +1092,6 @@ button.danger {
     grid-template-columns: 1fr;
   }
 
-  .bulk-tag-row {
-    flex-wrap: wrap;
-  }
-
-  .bulk-tag-row button {
-    width: 100%;
-  }
 }
 
 @media (min-width: 1450px) {

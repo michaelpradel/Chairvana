@@ -847,6 +847,65 @@ def add_tag_to_filtered_people() -> Any:
         dist_tags=dist_tags, expertise_tags=expertise_tags, expertise_add=expertise_add)))
 
 
+@app.post("/tag_marked_people")
+def tag_marked_people() -> Any:
+    query = request.form.get("q", "")
+    sort_mode = _normalize_sort_mode(request.form.get("sort", SORT_MODE_RANDOM))
+    history_commit = request.form.get("history", "").strip() or None
+    dist_tags = request.form.get("dist_tags", "#invite").strip()
+    expertise_tags = request.form.get("expertise_tags", dist_tags).strip()
+    expertise_add = request.form.get("expertise_add", "").strip()
+    selected_name = request.form.get("selected", "").strip()
+    raw_bulk_tag = request.form.get("bulk_tag", "").strip()
+    action = request.form.get("action", "add").strip().casefold()
+    names = request.form.getlist("names")
+
+    normalized_tags = _normalize_tag_query(raw_bulk_tag)
+    if len(normalized_tags) != 1:
+        flash("Please provide exactly one tag (for example: #invite).", "error")
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, selected_name=selected_name,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
+
+    valid_names = [n.strip() for n in names if isinstance(n, str) and n.strip()]
+    if not valid_names:
+        flash("No people were marked.", "error")
+        return redirect(url_for("index", **_index_redirect_params(
+            query=query, sort_mode=sort_mode, selected_name=selected_name,
+            history_commit=history_commit, dist_tags=dist_tags,
+            expertise_tags=expertise_tags, expertise_add=expertise_add)))
+
+    with _clean_lock:
+        if _clean_status["running"]:
+            flash("Cannot apply tags while affiliation cleaning is in progress.", "error")
+            return redirect(url_for("index", **_index_redirect_params(
+                query=query, sort_mode=sort_mode, selected_name=selected_name,
+                history_commit=history_commit, dist_tags=dist_tags,
+                expertise_tags=expertise_tags, expertise_add=expertise_add)))
+
+    tag = normalized_tags[0]
+    wrote_head = False
+    try:
+        if action == "remove":
+            count = store.remove_tag_from_many(valid_names, tag, base_commit=history_commit)
+            flash(f"Removed {tag} from {count} marked people.", "success")
+        else:
+            updates = [{"name": name, "flags": [tag]} for name in valid_names]
+            _, count = store.update_many(updates, base_commit=history_commit)
+            flash(f"Added {tag} to {count} marked people.", "success")
+        wrote_head = True
+    except RemoteConflictError as exc:
+        flash(str(exc), "error")
+    except ValueError as exc:
+        flash(str(exc), "error")
+
+    return redirect(url_for("index", **_index_redirect_params(
+        query=query, sort_mode=sort_mode, selected_name=selected_name,
+        history_commit=None if wrote_head else history_commit,
+        dist_tags=dist_tags, expertise_tags=expertise_tags, expertise_add=expertise_add)))
+
+
 @app.get("/api/distribution")
 def distribution_data() -> Any:
     requested_history = request.args.get("history", "").strip()

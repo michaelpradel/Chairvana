@@ -300,6 +300,10 @@
           }
 
           window.history.pushState({}, '', nextUrl.pathname + nextUrl.search);
+
+                  if (typeof window._applyMarkedState === 'function') {
+                    window._applyMarkedState();
+                  }
         })
         .catch(function () {
           window.location.assign(nextUrl.pathname + nextUrl.search);
@@ -332,6 +336,118 @@
 
     window.addEventListener('popstate', function () {
       window.location.reload();
+    });
+  }());
+
+  // Persistent people-marking logic (survives AJAX panel replacements).
+  (function () {
+    var markedNames = new Set();
+    var lastClickedIndex = null;
+
+    function getListItems() {
+      return Array.from(document.querySelectorAll('.person-list li[data-name]'));
+    }
+
+    function applyMarkedState() {
+      getListItems().forEach(function (li) {
+        li.classList.toggle('marked', markedNames.has(li.dataset.name));
+      });
+      var countEl = document.getElementById('markedCount');
+      var clearBtn = document.getElementById('clearMarked');
+      var addBtn = document.getElementById('addTagToMarked');
+      var removeBtn = document.getElementById('removeTagFromMarked');
+      var hasMarked = markedNames.size > 0;
+      if (countEl) countEl.textContent = markedNames.size + ' marked';
+      if (clearBtn) clearBtn.disabled = !hasMarked;
+      if (addBtn) addBtn.disabled = !hasMarked;
+      if (removeBtn) removeBtn.disabled = !hasMarked;
+    }
+
+    // Expose so the panels AJAX callback can call it after each refresh.
+    window._applyMarkedState = applyMarkedState;
+
+    document.addEventListener('click', function (e) {
+      var dot = e.target.closest('.person-select-dot');
+      if (!dot) return;
+      e.preventDefault();
+      var li = dot.closest('li[data-name]');
+      if (!li) return;
+      var name = li.dataset.name;
+      if (!name) return;
+      var items = getListItems();
+      var idx = items.findIndex(function (item) { return item.dataset.name === name; });
+      if (idx === -1) return;
+      if (e.shiftKey && lastClickedIndex !== null && lastClickedIndex >= 0 && lastClickedIndex < items.length) {
+        var start = Math.min(lastClickedIndex, idx);
+        var end = Math.max(lastClickedIndex, idx);
+        for (var i = start; i <= end; i++) {
+          if (i >= 0 && i < items.length) {
+            markedNames.add(items[i].dataset.name);
+          }
+        }
+      } else {
+        if (markedNames.has(name)) {
+          markedNames.delete(name);
+        } else {
+          markedNames.add(name);
+        }
+      }
+      lastClickedIndex = idx;
+      applyMarkedState();
+    });
+
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest('#clearMarked')) return;
+      markedNames.clear();
+      lastClickedIndex = null;
+      applyMarkedState();
+    });
+
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest('#markAll')) return;
+      getListItems().forEach(function (li) { markedNames.add(li.dataset.name); });
+      lastClickedIndex = null;
+      applyMarkedState();
+    });
+
+    function submitMarkedTag(action) {
+      if (!markedNames.size) return;
+      var tagInput = document.getElementById('markedTagInput');
+      if (!tagInput) return;
+      var tag = tagInput.value.trim();
+      if (!tag) { tagInput.focus(); return; }
+      var form = document.createElement('form');
+      form.method = 'POST';
+      form.action = '{{ url_for("tag_marked_people") }}';
+      var fields = {
+        q: (document.querySelector('#peopleSearchForm [name="q"]') || {}).value || '',
+        sort: (document.getElementById('people_sort_mode') || {}).value || 'random',
+        history: (document.querySelector('#peopleSearchForm [name="history"]') || {}).value || '',
+        dist_tags: (document.querySelector('#peopleSearchForm [name="dist_tags"]') || {}).value || '',
+        expertise_tags: (document.querySelector('#peopleSearchForm [name="expertise_tags"]') || {}).value || '',
+        expertise_add: (document.querySelector('#peopleSearchForm [name="expertise_add"]') || {}).value || '',
+        bulk_tag: tag,
+        action: action
+      };
+      Object.keys(fields).forEach(function (k) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = k; inp.value = fields[k];
+        form.appendChild(inp);
+      });
+      markedNames.forEach(function (n) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'names'; inp.value = n;
+        form.appendChild(inp);
+      });
+      document.body.appendChild(form);
+      form.submit();
+    }
+
+    document.addEventListener('click', function (e) {
+      if (e.target.closest('#addTagToMarked')) submitMarkedTag('add');
+    });
+    document.addEventListener('click', function (e) {
+      if (e.target.closest('#removeTagFromMarked')) submitMarkedTag('remove');
     });
   }());
 

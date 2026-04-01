@@ -31,6 +31,10 @@ class RemoteConflictError(RuntimeError):
     another user."""
 
 
+def _load_or_empty(load_fn: Any, commit: str | None) -> Any:
+    return load_fn(commit=commit) if commit is not None else load_fn()
+
+
 def _merge_values(existing: Any, new_value: Any) -> Any:
     if isinstance(existing, dict) and isinstance(new_value, dict):
         return _merge_dict(existing, new_value)
@@ -103,6 +107,29 @@ def _normalize_flags(raw_flags: Any) -> list[str] | None:
             normalized.append(lowered)
 
     return normalized or None
+
+
+def _summarize_names(names: Iterable[str], *, max_names: int = 3) -> str:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        stripped = name.strip()
+        if not stripped:
+            continue
+        key = stripped.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(stripped)
+
+    if not normalized:
+        return ""
+
+    preview = ", ".join(normalized[:max_names])
+    remaining = len(normalized) - max_names
+    if remaining > 0:
+        preview = f"{preview}, +{remaining} more"
+    return preview
 
 
 def _merge_person_record(existing: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -292,10 +319,12 @@ class DataStore:
         *,
         base_commit: str | None = None,
     ) -> tuple[int, int]:
-        self._prepare_write_base(base_commit)
-        people = self.load()
+        resolved_base_commit = self._prepare_write_base(base_commit)
+        people = _load_or_empty(self.load, resolved_base_commit)
         added = 0
         updated = 0
+        added_names: list[str] = []
+        updated_names: list[str] = []
 
         for entry in entries:
             name = entry.get("name")
@@ -311,12 +340,72 @@ class DataStore:
                     normalized_entry,
                 )
                 updated += 1
+                updated_names.append(normalized_name)
             else:
                 people[normalized_name] = normalized_entry
                 added += 1
+                added_names.append(normalized_name)
 
-        self._write_all(people)
+        if added == 1 and updated == 0:
+            message = f"Add person: {added_names[0]}"
+        elif updated == 1 and added == 0:
+            message = f"Update person: {updated_names[0]}"
+        else:
+            details: list[str] = []
+            if added:
+                details.append(f"{added} added")
+            if updated:
+                details.append(f"{updated} updated")
+            names_preview = _summarize_names([*added_names, *updated_names])
+            message = f"Batch update {added + updated} people ({', '.join(details)})"
+            if names_preview:
+                message = f"{message}: {names_preview}"
+
+        self._write_all(people, message=message)
         return added, updated
+
+    def remove_tag_from_many(
+        self,
+        names: list[str],
+        tag: str,
+        *,
+        base_commit: str | None = None,
+    ) -> int:
+        """Remove *tag* from all listed people in a single batch write.
+
+        Returns the number of people whose flags were actually modified.
+        """
+        resolved_base_commit = self._prepare_write_base(base_commit)
+        people = _load_or_empty(self.load, resolved_base_commit)
+        modified = 0
+        modified_names: list[str] = []
+        tag_lower = tag.casefold()
+        for name in names:
+            person = people.get(name.strip())
+            if person is None:
+                continue
+            existing_flags: list[str] = person.get("flags") or []
+            new_flags = [f for f in existing_flags if f.casefold() != tag_lower]
+            if len(new_flags) == len(existing_flags):
+                continue
+            person = dict(person)
+            if new_flags:
+                person["flags"] = new_flags
+            else:
+                person.pop("flags", None)
+            people[name.strip()] = person
+            modified += 1
+            modified_names.append(name.strip())
+        if modified:
+            if modified == 1:
+                message = f"Remove tag {tag} from {modified_names[0]}"
+            else:
+                message = f"Remove tag {tag} from {modified} people"
+                names_preview = _summarize_names(modified_names)
+                if names_preview:
+                    message = f"{message}: {names_preview}"
+            self._write_all(people, message=message)
+        return modified
 
     def update_many_expertise(
         self,
@@ -324,8 +413,8 @@ class DataStore:
         *,
         base_commit: str | None = None,
     ) -> tuple[int, int]:
-        self._prepare_write_base(base_commit)
-        embeddings_by_name = self.load_expertise_embeddings()
+        resolved_base_commit = self._prepare_write_base(base_commit)
+        embeddings_by_name = _load_or_empty(self.load_expertise_embeddings, resolved_base_commit)
         added = 0
         updated = 0
 
@@ -356,8 +445,8 @@ class DataStore:
         *,
         base_commit: str | None = None,
     ) -> tuple[int, int]:
-        self._prepare_write_base(base_commit)
-        embeddings_by_name = self.load_paper_expertise_embeddings()
+        resolved_base_commit = self._prepare_write_base(base_commit)
+        embeddings_by_name = _load_or_empty(self.load_paper_expertise_embeddings, resolved_base_commit)
         added = 0
         updated = 0
 
@@ -393,8 +482,8 @@ class DataStore:
         if not normalized_name:
             raise ValueError("name must be non-empty")
 
-        self._prepare_write_base(base_commit)
-        people = self.load()
+        resolved_base_commit = self._prepare_write_base(base_commit)
+        people = _load_or_empty(self.load, resolved_base_commit)
         merged_entry = {"name": normalized_name, **updates}
 
         is_new = normalized_name not in people
@@ -406,7 +495,8 @@ class DataStore:
                 merged_entry,
             )
 
-        self._write_all(people)
+        action = "Add" if is_new else "Update"
+        self._write_all(people, message=f"{action} person: {normalized_name}")
         return is_new, people[normalized_name]
 
     def update_person(
@@ -420,8 +510,8 @@ class DataStore:
         if not normalized_original_name:
             raise ValueError("original_name must be non-empty")
 
-        self._prepare_write_base(base_commit)
-        people = self.load()
+        resolved_base_commit = self._prepare_write_base(base_commit)
+        people = _load_or_empty(self.load, resolved_base_commit)
         existing = people.get(normalized_original_name)
         if existing is None:
             raise ValueError(f"No person found with name: {normalized_original_name}")
@@ -454,7 +544,11 @@ class DataStore:
         del people[normalized_original_name]
         people[normalized_new_name] = updated
 
-        self._write_all(people)
+        if normalized_new_name == normalized_original_name:
+            message = f"Update person: {normalized_new_name}"
+        else:
+            message = f"Rename person: {normalized_original_name} -> {normalized_new_name}"
+        self._write_all(people, message=message)
         return updated
 
     def add_person(
@@ -463,8 +557,8 @@ class DataStore:
         *,
         base_commit: str | None = None,
     ) -> tuple[bool, dict[str, Any]]:
-        self._prepare_write_base(base_commit)
-        people = self.load()
+        resolved_base_commit = self._prepare_write_base(base_commit)
+        people = _load_or_empty(self.load, resolved_base_commit)
 
         normalized_record = self._normalize_person_record(record)
         new_name = normalized_record["name"]
@@ -474,7 +568,7 @@ class DataStore:
             return False, people.get(new_name, normalized_record)
 
         people[new_name] = normalized_record
-        self._write_all(people)
+        self._write_all(people, message=f"Add person: {new_name}")
         return True, normalized_record
 
     def delete_person(
@@ -487,13 +581,13 @@ class DataStore:
         if not normalized_name:
             raise ValueError("name must be non-empty")
 
-        self._prepare_write_base(base_commit)
-        people = self.load()
+        resolved_base_commit = self._prepare_write_base(base_commit)
+        people = _load_or_empty(self.load, resolved_base_commit)
         if normalized_name not in people:
             raise ValueError(f"No person found with name: {normalized_name}")
 
         del people[normalized_name]
-        self._write_all(people)
+        self._write_all(people, message=f"Delete person: {normalized_name}")
 
     def replace_person(
         self,
@@ -506,8 +600,8 @@ class DataStore:
         if not normalized_original_name:
             raise ValueError("original_name must be non-empty")
 
-        self._prepare_write_base(base_commit)
-        people = self.load()
+        resolved_base_commit = self._prepare_write_base(base_commit)
+        people = _load_or_empty(self.load, resolved_base_commit)
         if normalized_original_name not in people:
             raise ValueError(f"No person found with name: {normalized_original_name}")
 
@@ -519,7 +613,11 @@ class DataStore:
         del people[normalized_original_name]
         people[new_name] = normalized
 
-        self._write_all(people)
+        if new_name == normalized_original_name:
+            message = f"Replace person record: {new_name}"
+        else:
+            message = f"Rename person: {normalized_original_name} -> {new_name}"
+        self._write_all(people, message=message)
         return normalized
 
     def replace_many(
@@ -528,10 +626,12 @@ class DataStore:
         *,
         base_commit: str | None = None,
     ) -> tuple[int, int]:
-        self._prepare_write_base(base_commit)
-        people = self.load()
+        resolved_base_commit = self._prepare_write_base(base_commit)
+        people = _load_or_empty(self.load, resolved_base_commit)
         replaced = 0
         renamed = 0
+        touched_names: list[str] = []
+        rename_pairs: list[tuple[str, str]] = []
 
         for replacement in replacements:
             normalized = self._normalize_person_record(replacement)
@@ -540,6 +640,7 @@ class DataStore:
             if target_name in people:
                 people[target_name] = normalized
                 replaced += 1
+                touched_names.append(target_name)
                 continue
 
             original_name = replacement.get("original_name")
@@ -558,8 +659,21 @@ class DataStore:
             people[target_name] = normalized
             replaced += 1
             renamed += 1
+            touched_names.append(target_name)
+            rename_pairs.append((normalized_original_name, target_name))
 
-        self._write_all(people)
+        if replaced == 1 and renamed == 1:
+            old_name, new_name = rename_pairs[0]
+            message = f"Rename person: {old_name} -> {new_name}"
+        elif replaced == 1:
+            message = f"Replace person record: {touched_names[0]}"
+        else:
+            message = f"Replace {replaced} people ({renamed} renamed)"
+            names_preview = _summarize_names(touched_names)
+            if names_preview:
+                message = f"{message}: {names_preview}"
+
+        self._write_all(people, message=message)
         return replaced, renamed
 
     def overwrite_all(
@@ -578,7 +692,10 @@ class DataStore:
                 raise ValueError(f"Duplicate name in overwrite set: {name}")
             normalized_records[name] = normalized
 
-        self._write_all(normalized_records)
+        self._write_all(
+            normalized_records,
+            message=f"Overwrite people.jsonl ({len(normalized_records)} people)",
+        )
         return len(normalized_records)
 
     def _normalize_person_record(self, record: dict[str, Any]) -> dict[str, Any]:
@@ -708,23 +825,15 @@ class DataStore:
             return ""
         raise RuntimeError(stderr or f"git show failed for commit {commit}")
 
-    def _prepare_write_base(self, base_commit: str | None) -> None:
+    def _prepare_write_base(self, base_commit: str | None) -> str | None:
         self._force_push_on_next_commit = False
         self._check_remote_not_advanced()
         if base_commit is None:
-            return
+            return None
 
-        target_commit = self.resolve_history_commit(base_commit)
-        head_commit = self._current_head_commit()
-        if head_commit == target_commit:
-            return
+        return self.resolve_history_commit(base_commit)
 
-        self._git("reset", "--hard", target_commit)
-        # Historical writes intentionally rewrite branch history, so a
-        # subsequent push may require force-with-lease.
-        self._force_push_on_next_commit = True
-
-    def _write_all(self, people: dict[str, dict[str, Any]]) -> None:
+    def _write_all(self, people: dict[str, dict[str, Any]], *, message: str | None = None) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         sorted_names = sorted(people, key=str.casefold)
 
@@ -734,10 +843,8 @@ class DataStore:
                 record.pop("affiliations", None)
                 file_obj.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-        self._commit_store_files(
-            message=f"Update people.jsonl ({len(sorted_names)} people)",
-            repo_paths=[self._people_repo_path()],
-        )
+        commit_message = message or f"Update people.jsonl ({len(sorted_names)} people)"
+        self._commit_store_files(message=commit_message, repo_paths=[self._people_repo_path()])
 
     def _write_all_expertise(self, embeddings_by_name: dict[str, dict[str, Any]]) -> None:
         self.expertise_embeddings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -812,6 +919,14 @@ class DataStore:
             stderr = fetch_result.stderr.strip()
             raise RuntimeError(stderr or f"git fetch {self.remote_name} failed")
 
+    def _is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        merge_base = self._git("merge-base", "--is-ancestor", ancestor, descendant, check=False)
+        if merge_base.returncode == 0:
+            return True
+        if merge_base.returncode == 1:
+            return False
+        raise RuntimeError(merge_base.stderr.strip() or "git merge-base failed")
+
     def _check_remote_not_advanced(self) -> None:
         if not self.auto_push or not self.remote_url:
             return
@@ -827,16 +942,21 @@ class DataStore:
         if remote_result.returncode != 0:
             return  # Remote branch does not exist yet; first push.
         remote_head = remote_result.stdout.strip()
-        if local_head != remote_head:
+        if local_head == remote_head:
+            return
+        if self._is_ancestor(local_head, remote_head):
             if self.auto_sync_on_conflict:
-                # Automatically fast-forward local to remote HEAD so the
-                # upcoming write is applied on top of the latest data.
+                # Fast-forward local to the latest remote state before writing.
                 self._git("reset", "--hard", remote_head)
                 return
             raise RemoteConflictError(
-                "Data was modified by another user. Your edit was lost. "
-                "Please reload before making any edits."
+                "Data was modified by another user. Please reload before making any edits."
             )
+        if self._is_ancestor(remote_head, local_head):
+            return
+        raise RemoteConflictError(
+            "Local data history has diverged from the remote. Please inspect data/.people_repo before editing."
+        )
 
     def _current_head_commit(self) -> str | None:
         self._ensure_local_repo()
@@ -883,18 +1003,8 @@ class DataStore:
         if push_result.returncode == 0:
             return
 
-        # Push rejected — another user pushed during the write window.
-        # Roll back the local commit, then resync local HEAD to remote.
-        self._git("reset", "--hard", "HEAD~1", check=False)
-        fetch_result = self._git("fetch", self.remote_name, check=False)
-        if fetch_result.returncode == 0:
-            self._git(
-                "reset",
-                "--hard",
-                f"{self.remote_name}/{self.push_branch}",
-                check=False,
-            )
+        stderr = push_result.stderr.strip() or push_result.stdout.strip() or "git push failed"
         raise RemoteConflictError(
-            "Data was modified by another user. Your edit was lost. "
-            "Please reload before making any edits."
+            "Failed to push data repository changes; the local commit was kept. "
+            f"Git reported: {stderr}"
         )
