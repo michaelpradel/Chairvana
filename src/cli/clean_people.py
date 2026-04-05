@@ -10,6 +10,14 @@ internal local git repository used by Chairvana.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Add src directory to path to allow imports from util, web, cli folders
+_SRC_DIR = Path(__file__).resolve().parent.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 import argparse
 import json
 import re
@@ -18,12 +26,12 @@ from typing import Any, Sequence
 
 from pydantic import BaseModel
 
-from llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
-from data_store import DataStore
+from util.llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
+from util.data_store import DataStore
 
 
 COUNTRY_CODE_RE = re.compile(r"^[A-Z]{3}$")
-CLEAN_AFFILIATION_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "clean_affiliation.txt"
+CLEAN_AFFILIATION_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "clean_affiliation.txt"
 
 
 class CleanAffiliationResult(BaseModel):

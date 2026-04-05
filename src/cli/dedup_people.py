@@ -9,6 +9,14 @@ Workflow:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Add src directory to path to allow imports from util, web, cli folders
+_SRC_DIR = Path(__file__).resolve().parent.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 import argparse
 import json
 from pathlib import Path
@@ -16,12 +24,12 @@ from typing import Any, Sequence
 
 from pydantic import BaseModel
 
-from llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
-from data_store import DataStore
+from util.llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
+from util.data_store import DataStore
 
 
-DUPLICATE_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "find_duplicate_people.txt"
-MERGE_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "merge_duplicate_people.txt"
+DUPLICATE_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "find_duplicate_people.txt"
+MERGE_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "merge_duplicate_people.txt"
 CHECKPOINT_GROUP_SIZE = 10
 MERGE_RETRY_COUNT = 2
 

@@ -12,6 +12,14 @@ Two-tier approach:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Add src directory to path to allow imports from util, web, cli folders
+_SRC_DIR = Path(__file__).resolve().parent.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 import argparse
 import json
 from pathlib import Path
@@ -19,19 +27,19 @@ from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel
 
-from llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
-from data_store import DataStore
-from web_search import find_homepage_and_email
+from util.llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
+from util.data_store import DataStore
+from util.web_search import find_homepage_and_email
 
 
 TIER1_NAME_GENDER_PROMPT_PATH = (
-    Path(__file__).resolve().parent.parent / "prompts" / "infer_gender_tier1_name.txt"
+    Path(__file__).resolve().parent.parent.parent / "prompts" / "infer_gender_tier1_name.txt"
 )
 TIER1_BATCH_NAME_GENDER_PROMPT_PATH = (
-    Path(__file__).resolve().parent.parent / "prompts" / "infer_gender_tier1_names_batch.txt"
+    Path(__file__).resolve().parent.parent.parent / "prompts" / "infer_gender_tier1_names_batch.txt"
 )
 TIER2_HOMEPAGE_GENDER_PROMPT_PATH = (
-    Path(__file__).resolve().parent.parent / "prompts" / "infer_gender_tier2_homepage.txt"
+    Path(__file__).resolve().parent.parent.parent / "prompts" / "infer_gender_tier2_homepage.txt"
 )
 GENDER_SAVE_INTERVAL = 10
 

@@ -7,6 +7,14 @@ person.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Add src directory to path to allow imports from util, web, cli folders
+_SRC_DIR = Path(__file__).resolve().parent.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 import argparse
 import hashlib
 import json
@@ -19,9 +27,9 @@ try:
 except Exception:  # noqa: BLE001
     np = None
 
-from add_expertise_embeddings import DEFAULT_MODEL, cosine_similarity, embed_texts
-from data_store import DataStore
-from query_dblp import (
+from cli.add_expertise_embeddings import DEFAULT_MODEL, cosine_similarity, embed_texts
+from util.data_store import DataStore
+from util.query_dblp import (
     DblpQueryEngine,
     Publication,
     TARGET_VENUE_PREFIXES,
@@ -34,7 +42,7 @@ DEFAULT_MIN_YEAR = 2024
 DEFAULT_MAX_YEAR = 2026
 DEFAULT_MIN_SIMILARITY = 0.30
 DEFAULT_TOP_K = 5
-PAPER_MATRIX_INDEX_PATH = Path(__file__).resolve().parent.parent / "data" / "expertise_gap_paper_matrix_index.npz"
+PAPER_MATRIX_INDEX_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "expertise_gap_paper_matrix_index.npz"
 
 
 def now_iso() -> str:

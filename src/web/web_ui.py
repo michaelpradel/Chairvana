@@ -1,5 +1,17 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Add src directory to path to allow imports from util, web, cli folders
+_SRC_DIR = Path(__file__).resolve().parent.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
+# Determine workspace root (3 levels up from web_ui.py in src/web/)
+_WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
+_LOGS_DIR = _WORKSPACE_ROOT / "logs"
+
 import argparse
 import hashlib
 import os
@@ -15,21 +27,21 @@ from typing import Any
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 
-from clean_people import clean_single
-from add_expertise_embeddings import cosine_similarity, get_or_create_topic_embedding, normalize_topic_text
-from expertise_gap_finder import find_expertise_gaps
-from llm_queries import DEFAULT_RESPONSES_MODEL
-from data_store import DataStore, RemoteConflictError
-from query_dblp import DblpQueryEngine, PACMPL_PREFIX, TARGET_VENUE_PREFIXES
-from sync_people_with_publications import sync_single_person_publications
-from web_ui_expertise_math import clean_embedding_vector as _clean_embedding_vector
-from web_ui_expertise_math import project_embeddings_2d as _project_embeddings_2d
-from web_ui_llm_usage import llm_usage_stats as _llm_usage_stats
-from web_ui_regions import normalize_region_name as _normalize_region_name
-from web_ui_regions import normalize_tag_query as _normalize_tag_query
-from web_ui_regions import region_for_person as _region_for_person
-from web_ui_regions import tagged_people_distribution as _compute_tagged_people_distribution
-from web_ui_regions import top_common_tags as _top_common_tags
+from cli.clean_people import clean_single
+from cli.add_expertise_embeddings import cosine_similarity, get_or_create_topic_embedding, normalize_topic_text
+from cli.expertise_gap_finder import find_expertise_gaps
+from util.llm_queries import DEFAULT_RESPONSES_MODEL
+from util.data_store import DataStore, RemoteConflictError
+from util.query_dblp import DblpQueryEngine, PACMPL_PREFIX, TARGET_VENUE_PREFIXES
+from cli.sync_people_with_publications import sync_single_person_publications
+from web.web_ui_expertise_math import clean_embedding_vector as _clean_embedding_vector
+from web.web_ui_expertise_math import project_embeddings_2d as _project_embeddings_2d
+from web.web_ui_llm_usage import llm_usage_stats as _llm_usage_stats
+from web.web_ui_regions import normalize_region_name as _normalize_region_name
+from web.web_ui_regions import normalize_tag_query as _normalize_tag_query
+from web.web_ui_regions import region_for_person as _region_for_person
+from web.web_ui_regions import tagged_people_distribution as _compute_tagged_people_distribution
+from web.web_ui_regions import top_common_tags as _top_common_tags
 
 
 app = Flask(__name__)
@@ -44,8 +56,6 @@ _clean_status: dict[str, Any] = {
     "changed": False,
     "result_name": None,
 }
-
-_LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 
 TOPIC_MIN_SIMILARITY = 0.22
 TOPIC_STRONG_SIMILARITY = 0.42
@@ -461,7 +471,8 @@ def _filtered_people(query: str, sort_mode: str, commit: str | None = None) -> t
             if topic_vector is None:
                 try:
                     created_topic = get_or_create_topic_embedding(store, topic)
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
+                    app.logger.warning("Failed to fetch topic embedding for %r: %s", topic, exc)
                     created_topic = None
                 if isinstance(created_topic, dict):
                     raw_created_vector = created_topic.get("embedding")
@@ -926,6 +937,7 @@ def create_person() -> Any:
     new_name = request.form.get("name", "").strip()
     new_affiliation = request.form.get("affiliation", "").strip()
     new_homepage = request.form.get("homepage", "").strip()
+    new_email = request.form.get("email", "").strip()
     new_gender = request.form.get("gender", "").strip()
     new_country = request.form.get("country", "").strip()
     flags = request.form.get("flags", "").strip()
@@ -980,6 +992,7 @@ def create_person() -> Any:
                 "name": new_name,
                 "affiliation": new_affiliation,
                 "homepage": new_homepage,
+                "email": new_email,
                 "flags": flags,
                 "gender": new_gender.casefold() if new_gender else "",
                 "country": normalized_country,
@@ -1220,6 +1233,7 @@ def update_person() -> Any:
     new_name = request.form.get("name", "").strip()
     new_affiliation = request.form.get("affiliation", "").strip()
     new_homepage = request.form.get("homepage", "").strip()
+    new_email = request.form.get("email", "").strip()
     new_gender = request.form.get("gender", "").strip()
     new_country = request.form.get("country", "").strip()
     flags = request.form.get("flags", "").strip()
@@ -1264,6 +1278,7 @@ def update_person() -> Any:
             "name": new_name,
             "affiliation": new_affiliation,
             "homepage": new_homepage,
+            "email": new_email,
             "flags": flags,
             "gender": new_gender.casefold() if new_gender else "",
             "country": normalized_country,

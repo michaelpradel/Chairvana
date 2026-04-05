@@ -8,6 +8,14 @@ human-readable.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Add src directory to path to allow imports from util, web, cli folders
+_SRC_DIR = Path(__file__).resolve().parent.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 import argparse
 import json
 import re
@@ -15,9 +23,9 @@ from datetime import UTC, datetime
 import math
 from typing import Any, Sequence
 
-from llm_queries import get_openai_client, log_llm_call
-from data_store import DataStore
-from query_dblp import DblpQueryEngine, Publication, get_target_publications_for_author
+from util.llm_queries import get_openai_client, log_llm_call
+from util.data_store import DataStore
+from util.query_dblp import DblpQueryEngine, Publication, get_target_publications_for_author
 
 
 DEFAULT_MODEL = "text-embedding-3-small"

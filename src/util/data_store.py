@@ -15,7 +15,7 @@ from typing import Any, Iterable
 
 
 DEFAULT_PEOPLE_REPO_DIRNAME = ".people_repo"
-DEFAULT_PEOPLE_REPO_PATH = Path(__file__).resolve().parent.parent / "data" / DEFAULT_PEOPLE_REPO_DIRNAME
+DEFAULT_PEOPLE_REPO_PATH = Path(__file__).resolve().parent.parent.parent / "data" / DEFAULT_PEOPLE_REPO_DIRNAME
 DEFAULT_PEOPLE_PATH = DEFAULT_PEOPLE_REPO_PATH / "people.jsonl"
 DEFAULT_EXPERTISE_EMBEDDINGS_PATH = DEFAULT_PEOPLE_REPO_PATH / "expertise_embeddings.jsonl"
 DEFAULT_PAPER_EXPERTISE_EMBEDDINGS_PATH = DEFAULT_PEOPLE_REPO_PATH / "paper_expertise_embeddings.jsonl"

@@ -1,0 +1,1 @@
+"""Chairvana web UI."""

@@ -7,6 +7,15 @@ This module supports two operations:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path as _PathForSysPath
+
+# Add src directory to path to allow imports from util, web, cli folders (when run as script)
+_SRC_DIR = _PathForSysPath(__file__).resolve().parent.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+_PROJECT_ROOT = _SRC_DIR.parent
+
 import argparse
 import gzip
 import json
@@ -22,7 +31,7 @@ from xml.sax import handler, make_parser
 from xml.sax.handler import feature_external_ges
 from xml.sax.xmlreader import AttributesImpl, InputSource
 
-from data_store import DataStore
+from util.data_store import DataStore
 from pydantic import BaseModel
 
 TARGET_PUBLICATION_TAGS = {"article", "inproceedings"}
@@ -37,7 +46,7 @@ PACMPL_PREFIX = "journals/pacmpl"
 
 # Years for which we resolve the main research track via LLM.
 MAIN_TRACK_YEARS: tuple[int, ...] = (2022, 2023, 2024, 2025, 2026)
-_MAIN_TRACK_CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "main_track_venues.json"
+_MAIN_TRACK_CACHE_PATH = _PROJECT_ROOT / "data" / "main_track_venues.json"
 
 # Module-level in-memory cache: venue_prefix -> year_str -> list[venue_string]
 _main_track_cache: dict[str, dict[str, list[str]]] | None = None
@@ -261,7 +270,7 @@ class DblpQueryEngine:
         filtered_jsonl_path: Path | str | None = None,
         preload_index: bool = False,
     ) -> None:
-        base_dir = Path(__file__).resolve().parent.parent
+        base_dir = _PROJECT_ROOT
         self.filtered_jsonl_path = (
             Path(filtered_jsonl_path)
             if filtered_jsonl_path is not None
@@ -575,13 +584,13 @@ def _resolve_main_track_via_llm(
     contains no publications for this (venue_prefix, year) pair.
     Caches the result on disk before returning.
     """
-    from llm_queries import get_openai_client, parse_structured_response  # noqa: PLC0415
+    from util.llm_queries import get_openai_client, parse_structured_response  # noqa: PLC0415
 
     venue_strings = engine.get_distinct_venue_strings(venue_prefix, year)
     if not venue_strings:
         return None
 
-    prompt_path = Path(__file__).resolve().parent.parent / "prompts" / "identify_main_research_track.txt"
+    prompt_path = _PROJECT_ROOT / "prompts" / "identify_main_research_track.txt"
     prompt_template = prompt_path.read_text(encoding="utf-8")
 
     venue_short = venue_prefix.split("/")[-1].upper()
@@ -859,7 +868,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
 
-    base_dir = Path(__file__).resolve().parent.parent
+    base_dir = _PROJECT_ROOT
     xml_path = args.xml if args.xml is not None else base_dir / "data" / "dblp.xml.gz"
     dtd_path = args.dtd if args.dtd is not None else base_dir / "data" / "dblp.dtd"
     filtered_jsonl_path = (

@@ -9,26 +9,36 @@ Goals:
 - Extend features without breaking repository conventions.
 
 ## Architecture At A Glance
-- Core data access and persistence: [src/data_store.py](src/data_store.py)
-- LLM client, structured parsing, and call logging: [src/llm_queries.py](src/llm_queries.py)
-- Main web app (Flask): [src/web_ui.py](src/web_ui.py)
-- DBLP preprocessing + query engine: [src/query_dblp.py](src/query_dblp.py)
-- Publication sync and summaries: [src/sync_people_with_publications.py](src/sync_people_with_publications.py)
-- Expertise embeddings: [src/add_expertise_embeddings.py](src/add_expertise_embeddings.py)
-- Expertise gap analysis: [src/expertise_gap_finder.py](src/expertise_gap_finder.py)
-- Batch enrichment/cleanup scripts:
-  - [src/auto_complete.py](src/auto_complete.py)
-  - [src/clean_people.py](src/clean_people.py)
-  - [src/auto_clean_and_dedup.py](src/auto_clean_and_dedup.py)
-  - [src/dedup_people.py](src/dedup_people.py)
-  - [src/infer_country.py](src/infer_country.py)
-  - [src/find_gender.py](src/find_gender.py)
-  - [src/find_past_pc_members.py](src/find_past_pc_members.py)
+- Core data access and persistence: [src/util/data_store.py](src/util/data_store.py)
+- LLM client, structured parsing, and call logging: [src/util/llm_queries.py](src/util/llm_queries.py)
+- Main web app (Flask): [src/web/web_ui.py](src/web/web_ui.py)
+- DBLP preprocessing + query engine: [src/util/query_dblp.py](src/util/query_dblp.py)
+- Web search utilities: [src/util/web_search.py](src/util/web_search.py)
+- Publication sync and summaries: [src/cli/sync_people_with_publications.py](src/cli/sync_people_with_publications.py)
+- Expertise embeddings: [src/cli/add_expertise_embeddings.py](src/cli/add_expertise_embeddings.py)
+- Expertise gap analysis: [src/cli/expertise_gap_finder.py](src/cli/expertise_gap_finder.py)
+- Batch enrichment/cleanup scripts (in [src/cli/](src/cli/)):
+  - [auto_complete.py](src/cli/auto_complete.py)
+  - [clean_people.py](src/cli/clean_people.py)
+  - [auto_clean_and_dedup.py](src/cli/auto_clean_and_dedup.py)
+  - [dedup_people.py](src/cli/dedup_people.py)
+  - [infer_country.py](src/cli/infer_country.py)
+  - [find_gender.py](src/cli/find_gender.py)
+  - [find_past_pc_members.py](src/cli/find_past_pc_members.py)
+  - [enrich_people_with_publications.py](src/cli/enrich_people_with_publications.py)
+  - [export_to_csv.py](src/cli/export_to_csv.py)
+- Web UI helpers (in [src/web/](src/web/)):
+  - [web_ui_expertise_math.py](src/web/web_ui_expertise_math.py)
+  - [web_ui_llm_usage.py](src/web/web_ui_llm_usage.py)
+  - [web_ui_regions.py](src/web/web_ui_regions.py)
+- Static assets and templates (in [src/web/](src/web/)):
+  - [static/](src/web/static/)
+  - [templates/](src/web/templates/)
 - Prompt templates used by structured LLM calls: [prompts/](prompts/)
 
 ## Global Invariants (Do Not Break)
 1. All people store reads/writes go through DataStore.
-- Use [src/data_store.py](src/data_store.py).
+- Use [src/util/data_store.py](src/util/data_store.py).
 - Do not directly read/write JSONL store files in [data/.people_repo/](data/.people_repo/).
 - Do not bypass DataStore with ad-hoc file I/O for people/expertise data.
 

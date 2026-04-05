@@ -26,7 +26,7 @@ Chairvana supports chairs of program committees (PCs) of academic conferences. I
 
 1. Start the UI:
 	```bash
-	python src/web_ui.py
+	python src/web/web_ui.py
 	```
 
 2. Open http://127.0.0.1:5000 in your browser.
@@ -40,7 +40,7 @@ Chairvana supports chairs of program committees (PCs) of academic conferences. I
 Querying the full `data/dblp.xml.gz` can be slow. Create a filtered JSONL snapshot once, then run queries against it:
 
 ```bash
-python src/query_dblp.py --preprocess
+python src/util/query_dblp.py --preprocess
 ```
 
 This writes `data/.people_repo/dblp_filtered.jsonl` containing only:

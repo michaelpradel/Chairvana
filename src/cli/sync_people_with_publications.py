@@ -7,12 +7,20 @@ Uses query_dblp.py to query and summarize publications.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Add src directory to path to allow imports from util, web, cli folders
+_SRC_DIR = Path(__file__).resolve().parent.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 import argparse
 from datetime import datetime
 from typing import Any
 
-from data_store import DataStore
-from query_dblp import DblpQueryEngine, create_publication_summary
+from util.data_store import DataStore
+from util.query_dblp import DblpQueryEngine, create_publication_summary
 
 
 def _format_summary(person_name: str, summary: dict[str, Any]) -> str:

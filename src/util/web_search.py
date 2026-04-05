@@ -17,16 +17,16 @@ from typing import Sequence
 
 from pydantic import BaseModel, HttpUrl, TypeAdapter, ValidationError
 
-from llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
+from util.llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
 
 
 MODEL = DEFAULT_RESPONSES_MODEL
-PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "select_best_web_result.txt"
+PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "select_best_web_result.txt"
 HOMEPAGE_EMAIL_PROMPT_PATH = (
-    Path(__file__).resolve().parent.parent / "prompts" / "select_homepage_and_email.txt"
+    Path(__file__).resolve().parent.parent.parent / "prompts" / "select_homepage_and_email.txt"
 )
 RESEARCH_TRACK_PROMPT_PATH = (
-    Path(__file__).resolve().parent.parent / "prompts" / "find_research_track_pc_page.txt"
+    Path(__file__).resolve().parent.parent.parent / "prompts" / "find_research_track_pc_page.txt"
 )
 
 

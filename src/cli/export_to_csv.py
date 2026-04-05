@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+
+import sys
+from pathlib import Path
+
+# Add src directory to path to allow imports from util, web, cli folders
+_SRC_DIR = Path(__file__).resolve().parent.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 """
 Helper script to export people flagged as #invite from people.jsonl to CSV.
 """

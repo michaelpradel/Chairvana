@@ -10,6 +10,14 @@ Given a conference name and year (for example, "ISSTA" and 2024), this script:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Add src directory to path to allow imports from util, web, cli folders
+_SRC_DIR = Path(__file__).resolve().parent.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 import argparse
 import logging
 import re
@@ -19,8 +27,8 @@ from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup, Tag
 
-from data_store import DataStore
-from web_search import search_research_track_pc_page
+from util.data_store import DataStore
+from util.web_search import search_research_track_pc_page
 
 logger = logging.getLogger(__name__)
 

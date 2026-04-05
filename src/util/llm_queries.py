@@ -14,7 +14,7 @@ DEFAULT_RESPONSES_MODEL = "gpt-5-mini-2025-08-07"
 
 TModel = TypeVar("TModel", bound=BaseModel)
 
-_LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
+_LOGS_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
 
 
 def log_llm_call(
@@ -44,7 +44,7 @@ def log_llm_call(
 
 
 def load_api_key(token_path: Path | None = None) -> str:
-    resolved_token_path = token_path or (Path(__file__).resolve().parent.parent / ".openai_token")
+    resolved_token_path = token_path or (Path(__file__).resolve().parent.parent.parent / ".openai_token")
     try:
         token = resolved_token_path.read_text(encoding="utf-8").strip()
     except FileNotFoundError as exc:

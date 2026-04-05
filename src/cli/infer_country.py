@@ -9,6 +9,14 @@ All reads/writes of people records go through ``DataStore``.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Add src directory to path to allow imports from util, web, cli folders
+_SRC_DIR = Path(__file__).resolve().parent.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 import argparse
 import json
 import re
@@ -17,12 +25,12 @@ from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel
 
-from llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
-from data_store import DataStore
+from util.llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
+from util.data_store import DataStore
 
 
 INFER_COUNTRY_PROMPT_PATH = (
-    Path(__file__).resolve().parent.parent / "prompts" / "infer_country_from_affiliation_batch.txt"
+    Path(__file__).resolve().parent.parent.parent / "prompts" / "infer_country_from_affiliation_batch.txt"
 )
 COUNTRY_SAVE_INTERVAL = 10
 COUNTRY_CODE_RE = re.compile(r"^[A-Z]{3}$")
