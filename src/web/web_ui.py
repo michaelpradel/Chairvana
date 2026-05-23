@@ -226,6 +226,7 @@ def _parse_search_query(query: str) -> dict[str, Any]:
         "exclude_tags": [],
         "gender": None,
         "country": None,
+        "exclude_country": None,
         "region": None,
         "affiliation_state": None,
         "pubs_op": None,
@@ -269,6 +270,10 @@ def _parse_search_query(query: str) -> dict[str, Any]:
             filters["gender"] = lowered_token
         elif match := re.match(r"^gender:(male|female|unknown)$", token, re.IGNORECASE):
             filters["gender"] = match.group(1).casefold()
+        elif match := re.match(r"^-country:(.+)$", token, re.IGNORECASE):
+            # Exclude people from a specific country, e.g., -country:CHN
+            raw_country = match.group(1).strip()
+            filters["exclude_country"] = "unknown" if raw_country.casefold() == "unknown" else raw_country.upper()
         elif match := re.match(r"^country:(.+)$", token, re.IGNORECASE):
             raw_country = match.group(1).strip()
             filters["country"] = "unknown" if raw_country.casefold() == "unknown" else raw_country.upper()
@@ -332,11 +337,18 @@ def _matches_search_filters(person: dict[str, Any], filters: dict[str, Any]) -> 
         if person_gender != filters["gender"]:
             return False
 
-    # Check country filter
+    # Check country filter (inclusive)
     if filters["country"] is not None:
         raw_country = person.get("country")
         person_country = raw_country.strip().upper() if isinstance(raw_country, str) and raw_country.strip() else "unknown"
         if person_country != filters["country"]:
+            return False
+
+    # Check excluded country filter (exclusive)
+    if filters["exclude_country"] is not None:
+        raw_country = person.get("country")
+        person_country = raw_country.strip().upper() if isinstance(raw_country, str) and raw_country.strip() else "unknown"
+        if person_country == filters["exclude_country"]:
             return False
 
     # Check region filter

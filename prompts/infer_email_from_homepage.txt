@@ -1,0 +1,25 @@
+You are extracting a researcher's email address from the text content of their homepage.
+
+Researcher name:
+{name}
+
+Homepage URL:
+{homepage}
+
+Homepage content (plain text excerpt):
+{homepage_content}
+
+Task:
+- Find the researcher's email address from the homepage content.
+- Return the researcher's own email, not a generic contact email whenever possible.
+- If the page contains obfuscated email formats, interpret them correctly.
+  Examples of obfuscation include:
+  - firstname.lastname - at - foo - dot - com
+  - firstname [at] foo [dot] com
+  - firstname (at) foo (dot) com
+  - firstname at foo dot com
+- If no reliable email is present, return null.
+
+Output requirements:
+- Return only JSON that matches the required schema.
+- Do not include markdown, explanations, or extra keys.

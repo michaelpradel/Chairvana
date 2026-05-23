@@ -1,8 +1,10 @@
-"""Auto-complete missing affiliation/country data in the people store.
+"""Auto-complete missing affiliation/country/email data in the people store.
 
-Two-stage process:
+Four-stage process:
 1. For people with affiliation but no country: infer country via LLM (no web search).
-2. For people missing affiliation: find homepage + infer affiliation/country via web search.
+2. For people with homepage but missing email: download homepage and infer email via LLM (no web search).
+3. For people with affiliation but missing email/homepage: find email (and homepage) via web search.
+4. For people missing affiliation: find homepage + infer affiliation/country/email via web search.
 
 For stage 2, to reduce name ambiguity, the prompt includes a few recent paper titles from DBLP.
 All reads/writes of people records go through ``DataStore``.
@@ -24,26 +26,39 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
+from urllib.request import Request, urlopen
 
+from bs4 import BeautifulSoup
 from pydantic import BaseModel, HttpUrl, TypeAdapter, ValidationError
 
 from util.llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
 from util.data_store import DataStore
 from util.query_dblp import DblpQueryEngine, get_target_publications_for_author
+from util.web_search import deobfuscate_email, find_homepage_and_email
 
 
 AUTO_COMPLETE_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "auto_complete_affiliation.txt"
 INFER_COUNTRY_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent.parent / "prompts" / "infer_country_from_affiliation_batch.txt"
 )
+INFER_EMAIL_FROM_HOMEPAGE_PROMPT_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "prompts" / "infer_email_from_homepage.txt"
+)
 COUNTRY_CODE_RE = re.compile(r"^[A-Z]{3}$")
 URL_ADAPTER = TypeAdapter(HttpUrl)
+MAX_HOMEPAGE_CHARS = 12000
+HOMEPAGE_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
 
 
 class AutoCompleteResult(BaseModel):
     homepage: str
     affiliation: str
     country: str | None = None
+    email: str | None = None
 
 
 class CountryInferenceResult(BaseModel):
@@ -55,6 +70,36 @@ class CountryInferenceResult(BaseModel):
 class CountryInferenceBatchResult(BaseModel):
     """Batch result with list of country assignments."""
     people: list[CountryInferenceResult]
+
+
+class EmailFromHomepageResult(BaseModel):
+    email: str | None = None
+
+
+def _normalize_tag(tag: str) -> str:
+    """Normalize tag values to lowercase with a leading #."""
+    normalized = tag.strip().casefold()
+    if not normalized:
+        raise ValueError("tag must be non-empty")
+    if not normalized.startswith("#"):
+        normalized = f"#{normalized}"
+    if normalized == "#":
+        raise ValueError("tag must be non-empty")
+    return normalized
+
+
+def _person_has_tag(person: dict[str, Any], required_tag: str) -> bool:
+    """Return whether the person has the required normalized tag."""
+    flags = person.get("flags")
+    if not isinstance(flags, list):
+        return False
+
+    normalized_flags = {
+        _normalize_tag(str(flag))
+        for flag in flags
+        if isinstance(flag, str) and str(flag).strip()
+    }
+    return required_tag in normalized_flags
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -108,6 +153,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Skip the country inference stage (only complete missing affiliations).",
     )
+    parser.add_argument(
+        "--tag",
+        default=None,
+        help="Only process people with this tag (e.g., '#invite').",
+    )
     args = parser.parse_args(argv)
 
     if args.limit is not None and args.limit <= 0:
@@ -116,6 +166,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--years-back must be a positive integer")
     if args.max_paper_titles <= 0:
         parser.error("--max-paper-titles must be a positive integer")
+    if args.tag is not None:
+        try:
+            args.tag = _normalize_tag(args.tag)
+        except ValueError:
+            parser.error("--tag must be non-empty")
 
     return args
 
@@ -126,6 +181,14 @@ def _load_country_prompt_template() -> str:
         return INFER_COUNTRY_PROMPT_PATH.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise FileNotFoundError(f"Missing prompt template: {INFER_COUNTRY_PROMPT_PATH}") from exc
+
+
+def _load_email_prompt_template() -> str:
+    """Load the homepage email inference prompt template."""
+    try:
+        return INFER_EMAIL_FROM_HOMEPAGE_PROMPT_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Missing prompt template: {INFER_EMAIL_FROM_HOMEPAGE_PROMPT_PATH}") from exc
 
 
 def _is_valid_country_code(code: str | None) -> bool:
@@ -151,6 +214,241 @@ def _needs_country_inference(person: dict[str, Any]) -> bool:
         return False
     
     return True
+
+
+def _needs_email_inference(person: dict[str, Any]) -> bool:
+    """Check if a person has homepage but missing email."""
+    homepage = person.get("homepage")
+    email = person.get("email")
+
+    if not isinstance(homepage, str) or not homepage.strip():
+        return False
+    if isinstance(email, str) and email.strip():
+        return False
+    return True
+
+
+def _download_homepage_text(homepage: str) -> str | None:
+    """Download homepage and return normalized plain text content."""
+    try:
+        normalized_homepage = str(URL_ADAPTER.validate_python(homepage.strip()))
+    except ValidationError:
+        print(f"[Email][Warn] Invalid homepage URL: {homepage!r}")
+        return None
+
+    request = Request(
+        normalized_homepage,
+        headers={
+            "User-Agent": HOMEPAGE_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+    )
+    try:
+        with urlopen(request, timeout=20) as response:  # noqa: S310
+            raw_bytes = response.read()
+            content_type = response.headers.get_content_charset()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Email][Warn] Failed to download homepage {normalized_homepage}: {exc}")
+        return None
+
+    encoding = content_type or "utf-8"
+    html = raw_bytes.decode(encoding, errors="replace")
+    soup = BeautifulSoup(html, "html.parser")
+    text_content = soup.get_text("\n", strip=True)
+    if not text_content.strip():
+        return None
+    return text_content[:MAX_HOMEPAGE_CHARS]
+
+
+def _infer_email_from_homepage(
+    person: dict[str, Any],
+    *,
+    model: str,
+    prompt_template: str,
+) -> str | None:
+    """Infer email address from downloaded homepage content."""
+    name = str(person.get("name", "")).strip()
+    homepage = str(person.get("homepage", "")).strip()
+    if not name or not homepage:
+        return None
+
+    homepage_text = _download_homepage_text(homepage)
+    if homepage_text is None:
+        return None
+
+    prompt = prompt_template.format(
+        name=name,
+        homepage=homepage,
+        homepage_content=homepage_text,
+    )
+
+    try:
+        parsed = parse_structured_response(
+            input_text=prompt,
+            response_model=EmailFromHomepageResult,
+            description="infer email from homepage",
+            model=model,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Email][Warn] LLM request failed for {name}: {exc}")
+        return None
+
+    email_candidate = (parsed.email or "").strip()
+    if not email_candidate:
+        return None
+
+    try:
+        return deobfuscate_email(email_candidate)
+    except ValueError:
+        print(f"[Email][Warn] Could not parse email for {name}: {email_candidate!r}")
+        return None
+
+
+def _infer_and_save_emails(
+    store: DataStore,
+    model: str,
+    dry_run: bool,
+    required_tag: str | None,
+) -> int:
+    """Infer emails for people with homepage but missing email.
+
+    Returns:
+        Number of people updated
+    """
+    people = store.load()
+    email_targets: list[dict[str, Any]] = []
+    for person in sorted(people.values(), key=lambda p: str(p.get("name", "")).casefold()):
+        if not _needs_email_inference(person):
+            continue
+        if required_tag is not None and not _person_has_tag(person, required_tag):
+            continue
+        email_targets.append(person)
+
+    if not email_targets:
+        print("[Email] No people found with homepage but missing email")
+        return 0
+
+    print(f"[Email] Found {len(email_targets)} people with homepage but missing email")
+    prompt_template = _load_email_prompt_template()
+
+    updates: list[dict[str, Any]] = []
+    updated_count = 0
+    for index, person in enumerate(email_targets, start=1):
+        name = str(person.get("name", "<unknown>"))
+        print(f"[Email] ({index}/{len(email_targets)}) Inferring email for: {name}")
+        email = _infer_email_from_homepage(person, model=model, prompt_template=prompt_template)
+        if not email:
+            continue
+
+        update = {"name": name, "email": email}
+        updates.append(update)
+        print(f"[Plan][Email] {name} -> email={email!r}")
+
+        if not dry_run:
+            _, person_updated = store.update_many([update])
+            if person_updated:
+                updated_count += person_updated
+                print(f"[Email] Saved email for {name}")
+
+    if not updates:
+        return 0
+
+    if dry_run:
+        print(f"[Dry-run] Would update {len(updates)} people with email info")
+        for update in updates:
+            print(f"  {update['name']}: {update['email']}")
+        return len(updates)
+
+    print(f"[Email] Saved {updated_count} email updates")
+    return updated_count
+
+
+def _needs_email_web_search(person: dict[str, Any]) -> bool:
+    """Check if a person has affiliation but is still missing email (no homepage-based inference possible)."""
+    affiliation = person.get("affiliation")
+    # People without affiliation will be handled by Stage 4 (affiliation completion)
+    if not isinstance(affiliation, str) or not affiliation.strip():
+        return False
+    email = person.get("email")
+    if isinstance(email, str) and email.strip():
+        return False
+    return True
+
+
+def _infer_and_save_emails_via_web_search(
+    store: DataStore,
+    dry_run: bool,
+    required_tag: str | None,
+) -> int:
+    """Use web search to find emails (and missing homepages) for people with affiliation but no email.
+
+    Returns:
+        Number of people updated
+    """
+    people = store.load()
+    targets: list[dict[str, Any]] = []
+    for person in sorted(people.values(), key=lambda p: str(p.get("name", "")).casefold()):
+        if not _needs_email_web_search(person):
+            continue
+        if required_tag is not None and not _person_has_tag(person, required_tag):
+            continue
+        targets.append(person)
+
+    if not targets:
+        print("[EmailWeb] No people found with affiliation but missing email")
+        return 0
+
+    print(f"[EmailWeb] Found {len(targets)} people with affiliation but missing email")
+
+    updates: list[dict[str, Any]] = []
+    updated_count = 0
+    for index, person in enumerate(targets, start=1):
+        name = str(person.get("name", "<unknown>"))
+        affiliation = str(person.get("affiliation", "")).strip()
+        print(f"[EmailWeb] ({index}/{len(targets)}) Finding email for: {name}")
+
+        person_query = f"{name}, {affiliation}" if affiliation else name
+        try:
+            result = find_homepage_and_email(person_query)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[EmailWeb][Warn] Web search failed for {name}: {exc}")
+            continue
+
+        update: dict[str, Any] = {"name": name}
+        if result.email:
+            update["email"] = result.email
+        # Also persist a newly found homepage if the person has none yet
+        existing_homepage = person.get("homepage", "")
+        if result.homepage and (not isinstance(existing_homepage, str) or not existing_homepage.strip()):
+            update["homepage"] = result.homepage
+
+        if len(update) <= 1:  # nothing beyond the key
+            continue
+
+        updates.append(update)
+        print(
+            f"[Plan][EmailWeb] {name} -> "
+            f"email={update.get('email', '<none>')!r}, "
+            f"homepage={update.get('homepage', '<none>')!r}"
+        )
+
+        if not dry_run:
+            _, person_updated = store.update_many([update])
+            if person_updated:
+                updated_count += person_updated
+                print(f"[EmailWeb] Saved for {name}")
+
+    if not updates:
+        return 0
+
+    if dry_run:
+        print(f"[Dry-run] Would update {len(updates)} people with email/homepage via web search")
+        for u in updates:
+            print(f"  {u['name']}: email={u.get('email', '')!r}, homepage={u.get('homepage', '')!r}")
+        return len(updates)
+
+    print(f"[EmailWeb] Saved {updated_count} updates via web search")
+    return updated_count
 
 
 def _batch_country_prompt(people_batch: list[dict[str, Any]]) -> str:
@@ -221,6 +519,7 @@ def _infer_and_save_countries(
     store: DataStore,
     model: str,
     dry_run: bool,
+    required_tag: str | None,
 ) -> int:
     """Infer countries for people with affiliation but no country.
     
@@ -232,8 +531,11 @@ def _infer_and_save_countries(
     # Filter to people needing country inference
     people_needing_country: list[dict[str, Any]] = []
     for person in sorted(people.values(), key=lambda p: str(p.get("name", "")).casefold()):
-        if _needs_country_inference(person):
-            people_needing_country.append(person)
+        if not _needs_country_inference(person):
+            continue
+        if required_tag is not None and not _person_has_tag(person, required_tag):
+            continue
+        people_needing_country.append(person)
     
     if not people_needing_country:
         print("[Country] No people found with affiliation but missing country")
@@ -436,6 +738,13 @@ def _infer_affiliation_and_country(
     if country is not None:
         updates["country"] = country
 
+    email_candidate = (parsed.email or "").strip()
+    if email_candidate:
+        try:
+            updates["email"] = deobfuscate_email(email_candidate)
+        except ValueError:
+            print(f"[Warn] Invalid email returned by LLM for {name}: {parsed.email!r}")
+
     return updates
 
 
@@ -444,9 +753,13 @@ def _iter_targets_for_affiliation(
     *,
     requested_name: str | None,
     limit: int | None,
+    required_tag: str | None,
 ) -> list[dict[str, Any]]:
     if requested_name is not None:
         _, person = _get_person_by_name(people, requested_name)
+        if required_tag is not None and not _person_has_tag(person, required_tag):
+            print(f"[Skip] Missing required tag {required_tag} for {person.get('name', '<unknown>')}")
+            return []
         if not _has_missing_affiliation(person):
             print(f"[Skip] Affiliation already set for {person.get('name', '<unknown>')}")
             return []
@@ -456,6 +769,7 @@ def _iter_targets_for_affiliation(
         people[name]
         for name in sorted(people, key=str.casefold)
         if _has_missing_affiliation(people[name])
+        and (required_tag is None or _person_has_tag(people[name], required_tag))
     ]
     return targets[:limit] if limit is not None else targets
 
@@ -465,28 +779,40 @@ def auto_complete_affiliations(
     store: DataStore,
     model: str,
     requested_name: str | None,
+    required_tag: str | None,
     limit: int | None,
     years_back: int,
     max_paper_titles: int,
     skip_country_inference: bool,
     dry_run: bool,
-) -> tuple[int, int, int, int]:
-    """Process country inference and affiliation completion.
+) -> tuple[int, int, int, int, int]:
+    """Process country inference, email inference, and affiliation completion.
     
     Returns:
-        (country_updated, affiliation_processed, affiliation_changed, affiliation_skipped)
+        (country_updated, email_updated, affiliation_processed, affiliation_changed, affiliation_skipped)
     """
     # Stage 1: Infer countries for people with affiliation but no country
     country_updated = 0
     if not skip_country_inference:
-        country_updated = _infer_and_save_countries(store, model, dry_run)
-    
-    # Reload people after country inference stage
+        country_updated = _infer_and_save_countries(store, model, dry_run, required_tag)
+
+    # Stage 2: Infer emails for people with homepage but missing email (no web search)
+    email_updated = _infer_and_save_emails(store, model, dry_run, required_tag)
+
+    # Stage 3: Use web search to find email (and homepage) for people with affiliation but missing email
+    email_updated += _infer_and_save_emails_via_web_search(store, dry_run, required_tag)
+
+    # Reload people after country/email inference stages
     people = store.load()
-    targets = _iter_targets_for_affiliation(people, requested_name=requested_name, limit=limit)
+    targets = _iter_targets_for_affiliation(
+        people,
+        requested_name=requested_name,
+        limit=limit,
+        required_tag=required_tag,
+    )
 
     if not targets:
-        return country_updated, 0, 0, 0
+        return country_updated, email_updated, 0, 0, 0
 
     prompt_template = _load_prompt_template()
     engine = DblpQueryEngine(preload_index=True)
@@ -517,29 +843,35 @@ def auto_complete_affiliations(
             "[Plan] "
             f"{name} -> affiliation={updates.get('affiliation')!r}, "
             f"country={updates.get('country', '<none>')!r}, "
-            f"homepage={updates.get('homepage', '<none>')!r}"
+            f"homepage={updates.get('homepage', '<none>')!r}, "
+            f"email={updates.get('email', '<none>')!r}"
         )
 
     if dry_run:
         for update in pending_updates:
             print(json.dumps(update, ensure_ascii=False))
-        return country_updated, len(targets), len(pending_updates), skipped
+        return country_updated, email_updated, len(targets), len(pending_updates), skipped
 
     if not pending_updates:
-        return country_updated, len(targets), 0, skipped
+        return country_updated, email_updated, len(targets), 0, skipped
 
     added, updated = store.update_many(pending_updates)
-    return country_updated, len(targets), added + updated, skipped
+
+    # Run email inference again because Stage 3 may have added new homepages.
+    email_updated += _infer_and_save_emails(store, model, dry_run=False, required_tag=required_tag)
+
+    return country_updated, email_updated, len(targets), added + updated, skipped
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     store = DataStore(path=args.people_file) if args.people_file is not None else DataStore()
 
-    country_updated, processed, changed, skipped = auto_complete_affiliations(
+    country_updated, email_updated, processed, changed, skipped = auto_complete_affiliations(
         store=store,
         model=args.model,
         requested_name=args.name,
+        required_tag=args.tag,
         limit=args.limit,
         years_back=args.years_back,
         max_paper_titles=args.max_paper_titles,
@@ -548,6 +880,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     print(f"Country inference: {country_updated} updated")
+    print(f"Email inference: {email_updated} updated")
     print(
         f"Affiliation completion: processed {processed}; "
         f"changed {changed}; skipped {skipped}."

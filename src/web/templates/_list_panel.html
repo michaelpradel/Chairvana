@@ -24,7 +24,7 @@
       name="q" 
       value="{{ query }}" 
       placeholder="e.g., region:Europe t:testing pubs>5"
-      title="Supported filters: text, -#tag, male/female, gender:unknown, country:USA, region:Europe, affiliation:unknown, pubs>N, pcs>N, t:topic"
+      title="Supported filters: text, -#tag, male/female, gender:unknown, country:USA, -country:CHN, region:Europe, affiliation:unknown, pubs>N, pcs>N, t:topic"
     />
     <div class="sort-controls" aria-label="Sort people list">
       <span class="sort-controls-label">Sort</span>
@@ -43,7 +43,7 @@
           <dt>Gender</dt>
           <dd>Search by <code>male</code>, <code>female</code>, or <code>gender:unknown</code></dd>
           <dt>Country</dt>
-          <dd>Search by <code>country:USA</code>, <code>country:DEU</code>, or <code>country:unknown</code></dd>
+          <dd>Search by <code>country:USA</code>, <code>country:DEU</code>, or <code>country:unknown</code>. Exclude with <code>-country:CHN</code></dd>
           <dt>Region</dt>
           <dd>Search by <code>region:Europe</code> or <code>region:"North America"</code></dd>
           <dt>Affiliation</dt>

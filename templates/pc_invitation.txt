@@ -1,0 +1,28 @@
+Subject: Invitation to the FSE 2027 Program Committee (respond by <DEADLINE>)
+
+Dear <NAME>,
+
+We're pleased to invite you to the Program Committee (PC) of the 2027 edition of FSE, the ACM International Conference on the Foundations of Software Engineering.
+
+Please let us know by <DEADLINE> whether you're accepting this invitation by filling out this form:
+
+https://forms.gle/QPSRVkYGiXEouc4x8
+
+FSE enjoys a very strong reputation, which critically depends on the dedicated service of distinguished reviewers like you. If you accept this invitation, you commit to personally write detailed, balanced, and informative reviews for all the papers assigned to you, and to diligently contribute to the online discussion of the papers assigned to you in a timely fashion. All reviewing will be double-blind. PC members are, of course, invited to also submit papers to the conference.
+
+Here is a summary of the important dates:
+
+Oct 2, 2026                  : Submissions deadline
+Oct 12, 2026                 : Review assignment
+Nov 30, 2026                 : All reviews due
+Dec 18, 2026 to Jan 15, 2027 : Discussion period
+Mar 5 to Mar 25, 2027        : Discussion period for major revisions
+July 2027                    : Conference
+
+We hope you will accept and look forward to working with you to make
+FSE'27 a great success!
+
+Thanks,
+Baishakhi Ray & Michael Pradel
+FSE 2027 PC Chairs
+

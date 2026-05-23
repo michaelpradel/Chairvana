@@ -4,3 +4,4 @@ data/*
 .openai_token_michael
 __pycache__*
 logs/*
+*.csv

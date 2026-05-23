@@ -35,6 +35,20 @@ Chairvana supports chairs of program committees (PCs) of academic conferences. I
 
 (The following is highly incomplete. Ignore for now.)
 
+### Tag OOPSLA-Only People
+
+Find people whose `publication_summary` contains only OOPSLA publications and add `#oopslaonly`:
+
+```bash
+python src/cli/tag_oopsla_only.py
+```
+
+Preview changes without writing:
+
+```bash
+python src/cli/tag_oopsla_only.py --dry-run
+```
+
 ### DBLP Preprocessing
 
 Querying the full `data/dblp.xml.gz` can be slow. Create a filtered JSONL snapshot once, then run queries against it:

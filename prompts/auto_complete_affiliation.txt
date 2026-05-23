@@ -1,6 +1,6 @@
 You are completing missing affiliation data for a software engineering researcher.
 
-Use web search to identify the most likely personal homepage and current affiliation.
+Use web search to identify the most likely personal homepage, current affiliation, and email address.
 
 Input person:
 - Name: {name}
@@ -15,6 +15,7 @@ Requirements:
 - Return exactly one homepage URL (or empty string if unavailable).
 - Return one affiliation string (non-empty only when confident).
 - Return country as ISO-3166 alpha-3 code (for example: USA, DEU, CAN) or empty string if unsure.
+- Return one email address (or empty string if unavailable). If the email appears obfuscated (for example "name -at- university dot edu"), normalize it.
 - If uncertain about the person identity, return empty strings for all fields.
 
 Return only JSON that matches the required schema. No markdown, no explanations, no extra keys.
