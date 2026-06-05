@@ -1,33 +1,20 @@
-"""Clean person affiliations and country codes in people.jsonl.
+"""Shared person-cleaning helpers used by web and script workflows.
 
-This script asks an LLM to normalize affiliation data for either:
-- one entry identified by name, or
-- all entries in the people store.
-
-All writes go through ``DataStore`` so updates are committed to the
-internal local git repository used by Chairvana.
+This module contains the LLM-backed affiliation/country cleanup logic that was
+previously embedded in the clean_people CLI tool.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Add src directory to path to allow imports from util, web, cli folders
-_SRC_DIR = Path(__file__).resolve().parent.parent
-if str(_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(_SRC_DIR))
-
-import argparse
 import json
 import re
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from pydantic import BaseModel
 
-from util.llm_queries import DEFAULT_RESPONSES_MODEL, parse_structured_response
 from util.data_store import DataStore
+from util.llm_queries import parse_structured_response
 
 
 COUNTRY_CODE_RE = re.compile(r"^[A-Z]{3}$")
@@ -37,39 +24,6 @@ CLEAN_AFFILIATION_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / 
 class CleanAffiliationResult(BaseModel):
     affiliation: str
     country: str | None = None
-
-
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Clean affiliation/country fields in people.jsonl via an LLM."
-    )
-    parser.add_argument(
-        "--name",
-        default=None,
-        help="Clean one entry by exact person name.",
-    )
-    parser.add_argument(
-        "--all",
-        action="store_true",
-        help="Clean all entries in the people file.",
-    )
-    parser.add_argument(
-        "--people-file",
-        type=Path,
-        default=None,
-        help="Optional people JSONL path override. By default, data_store.py chooses the store location.",
-    )
-    parser.add_argument(
-        "--model",
-        default=DEFAULT_RESPONSES_MODEL,
-        help=f"OpenAI model to use (default: {DEFAULT_RESPONSES_MODEL}).",
-    )
-
-    args = parser.parse_args(argv)
-    if bool(args.name) == bool(args.all):
-        parser.error("Specify exactly one of --name or --all")
-
-    return args
 
 
 def _cleaning_prompt(person: dict[str, Any]) -> str:
@@ -142,7 +96,12 @@ def _get_person_by_name(people: dict[str, dict[str, Any]], requested_name: str) 
     raise ValueError(f"Ambiguous name {requested_name!r}: {matches}")
 
 
-def clean_single(store: DataStore, name: str, model: str, base_commit: str | None = None) -> tuple[bool, str]:
+def clean_single(
+    store: DataStore,
+    name: str,
+    model: str,
+    base_commit: str | None = None,
+) -> tuple[bool, str]:
     people = store.load(commit=base_commit)
     original_name, entry = _get_person_by_name(people, name)
     cleaned = clean_record(entry, model)
@@ -152,43 +111,3 @@ def clean_single(store: DataStore, name: str, model: str, base_commit: str | Non
 
     store.replace_person(original_name, cleaned, base_commit=base_commit)
     return True, cleaned["name"]
-
-
-def clean_all(store: DataStore, model: str) -> tuple[int, int]:
-    people = store.load()
-    cleaned_records: list[dict[str, Any]] = []
-    changed_count = 0
-
-    for name in sorted(people, key=str.casefold):
-        original = people[name]
-        cleaned = clean_record(original, model)
-        if cleaned != original:
-            changed_count += 1
-        cleaned_records.append(cleaned)
-
-    if not cleaned_records:
-        return 0, 0
-
-    replaced, _ = store.replace_many(cleaned_records)
-    return replaced, changed_count
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
-    store = DataStore(path=args.people_file) if args.people_file is not None else DataStore()
-
-    if args.name:
-        changed, cleaned_name = clean_single(store, args.name, args.model)
-        if changed:
-            print(f"Cleaned and saved: {cleaned_name}")
-        else:
-            print(f"No changes required: {cleaned_name}")
-        return 0
-
-    replaced, changed = clean_all(store, args.model)
-    print(f"Processed {replaced} entries; changed {changed} entries")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

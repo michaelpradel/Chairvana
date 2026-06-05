@@ -27,7 +27,7 @@ from typing import Any
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 
-from cli.clean_people import clean_single
+from util.clean_people import clean_single
 from cli.add_expertise_embeddings import cosine_similarity, get_or_create_topic_embedding, normalize_topic_text
 from cli.expertise_gap_finder import find_expertise_gaps
 from util.llm_queries import DEFAULT_RESPONSES_MODEL

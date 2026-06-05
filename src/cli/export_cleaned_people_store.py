@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export a people-store copy with tags/flags removed."""
+"""Export a people-store copy with tags/flags removed as JSONL."""
 
 from __future__ import annotations
 
@@ -18,13 +18,13 @@ from typing import Any, Sequence
 from util.data_store import DEFAULT_PEOPLE_REPO_PATH, DataStore
 
 
-DEFAULT_OUTPUT_PATH = DEFAULT_PEOPLE_REPO_PATH / "people.json"
+DEFAULT_OUTPUT_PATH = DEFAULT_PEOPLE_REPO_PATH / "people.jsonl"
 REMOVED_FIELDS = {"flags", "tags"}
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Export a cleaned people.json copy without tags or flags."
+        description="Export a cleaned people JSONL copy without tags or flags."
     )
     parser.add_argument(
         "--people-file",
@@ -37,7 +37,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "-o",
         type=Path,
         default=DEFAULT_OUTPUT_PATH,
-        help=f"Output JSON path (default: {DEFAULT_OUTPUT_PATH}).",
+        help=f"Output JSONL path (default: {DEFAULT_OUTPUT_PATH}).",
     )
     return parser.parse_args(argv)
 
@@ -51,8 +51,9 @@ def export_cleaned_people(store: DataStore, output_path: Path) -> int:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as output_file:
-        json.dump(people, output_file, ensure_ascii=False, indent=2)
-        output_file.write("\n")
+        for person in people:
+            output_file.write(json.dumps(person, ensure_ascii=False))
+            output_file.write("\n")
 
     return len(people)
 
