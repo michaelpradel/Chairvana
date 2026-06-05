@@ -47,7 +47,7 @@ To use it, clone the repository and copy its contents into your `data/people_sto
 
 ```
 git clone https://github.com/michaelpradel/Chairvana-data-SE.git /tmp/people_store
-cp -r /tmp/people_store/*.jsonl data/people_store/
+cp /tmp/people_store/*.jsonl data/people_store/
 ```
 
 ### Option 2: Creating the People Store from Scratch
