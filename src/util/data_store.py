@@ -20,7 +20,7 @@ DEFAULT_PEOPLE_PATH = DEFAULT_PEOPLE_REPO_PATH / "people.jsonl"
 DEFAULT_EXPERTISE_EMBEDDINGS_PATH = DEFAULT_PEOPLE_REPO_PATH / "expertise_embeddings.jsonl"
 DEFAULT_PAPER_EXPERTISE_EMBEDDINGS_PATH = DEFAULT_PEOPLE_REPO_PATH / "paper_expertise_embeddings.jsonl"
 DEFAULT_DBLP_FILTERED_PATH = DEFAULT_PEOPLE_REPO_PATH / "dblp_filtered.jsonl"
-DEFAULT_PEOPLE_REPO_REMOTE = "https://github.com/michaelpradel/Chairvana-fse2027-data.git"
+DEFAULT_PEOPLE_REPO_REMOTE = None
 DEFAULT_PEOPLE_REPO_REMOTE_NAME = "origin"
 DEFAULT_PEOPLE_REPO_BRANCH = "main"
 
@@ -171,7 +171,7 @@ class DataStore:
         repo_dir: Path | None = None,
         expertise_embeddings_path: Path | None = None,
         paper_expertise_embeddings_path: Path | None = None,
-        remote_url: str = DEFAULT_PEOPLE_REPO_REMOTE,
+        remote_url: str | None = DEFAULT_PEOPLE_REPO_REMOTE,
         remote_name: str = DEFAULT_PEOPLE_REPO_REMOTE_NAME,
         push_branch: str = DEFAULT_PEOPLE_REPO_BRANCH,
         auto_push: bool = True,
@@ -913,6 +913,17 @@ class DataStore:
 
         raise RuntimeError(stderr or f"git remote get-url failed for {self.remote_name}")
 
+    def _has_remote_configured(self) -> bool:
+        remote_result = self._git("remote", "get-url", self.remote_name, check=False)
+        if remote_result.returncode == 0:
+            return True
+
+        stderr = remote_result.stderr.strip()
+        if "No such remote" in stderr:
+            return False
+
+        raise RuntimeError(stderr or f"git remote get-url failed for {self.remote_name}")
+
     def _fetch_remote(self) -> None:
         fetch_result = self._git("fetch", self.remote_name, check=False)
         if fetch_result.returncode != 0:
@@ -928,11 +939,13 @@ class DataStore:
         raise RuntimeError(merge_base.stderr.strip() or "git merge-base failed")
 
     def _check_remote_not_advanced(self) -> None:
-        if not self.auto_push or not self.remote_url:
+        if not self.auto_push:
             return
         git_dir = self.repo_dir / ".git"
         if not git_dir.exists():
             return  # Fresh repo; no remote state to compare against.
+        if not self._has_remote_configured():
+            return  # Local-only repo; no remote state to compare against.
         self._fetch_remote()
         local_head = self._current_head_commit()
         if local_head is None:
@@ -995,6 +1008,9 @@ class DataStore:
             self._force_push_on_next_commit = False
 
     def _push_latest_commit(self, *, force_with_lease: bool) -> None:
+        if not self._has_remote_configured():
+            return
+
         push_args = ["push"]
         if force_with_lease:
             push_args.append("--force-with-lease")

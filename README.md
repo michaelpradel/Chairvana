@@ -28,7 +28,7 @@ As you'll store potentially sensitive information about researchers (e.g., who t
 To create a local repository, run:
 
 ```
-mkdir data/people_store
+mkdir -p data/people_store
 cd data/people_store
 git init
 cd ../..
@@ -47,7 +47,7 @@ To use it, clone the repository and copy its contents into your `data/people_sto
 
 ```
 git clone https://github.com/michaelpradel/Chairvana-data-SE.git /tmp/people_store
-cp -r /tmp/people_store/* data/people_store/
+cp -r /tmp/people_store/*.jsonl data/people_store/
 ```
 
 ### Option 2: Creating the People Store from Scratch
