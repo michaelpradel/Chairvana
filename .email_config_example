@@ -1,0 +1,6 @@
+# SMTP configuration for src/cli/email.py
+# Fill in with your actual account details.
+server: mail.provider.com
+port: 465
+user: yourname@provider.com
+security: ssl

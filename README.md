@@ -102,6 +102,7 @@ Integrating DBLP data is a two-step process: preprocess first, then sync publica
 `python src/cli/export_to_csv.py --tag invite --output invite_people.csv` exports people with the given tag from `data/people_store/people.jsonl` to CSV.
 
 `python src/cli/email.py --tag inviter1` sends templated emails to people with the given tag, previews random samples, asks for confirmation, and writes logs to `logs/`.
+It reads SMTP settings from `.email_config` in the repository root (see the example file for required keys).
 
 `python src/cli/import_pc_invitation_responses.py r1_responses.csv inviter1` imports invitation responses, matches people by email/name, updates tags (Yes/No), and fills changed email addresses from the response file.
 

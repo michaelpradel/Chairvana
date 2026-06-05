@@ -17,7 +17,6 @@ if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
 import argparse
-import json
 import random
 import smtplib
 import textwrap
@@ -30,13 +29,9 @@ from typing import Any, Sequence
 
 from util.data_store import DataStore
 
-
-EMAIL_CONFIG = {
-    "server": "mail.your-server.de",
-    "port": 465,
-    "user": "michael@binaervarianz.de",
-    "security": "SSL/TLS",
-}
+WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
+EMAIL_CONFIG_PATH = WORKSPACE_ROOT / ".email_config"
+REQUIRED_EMAIL_CONFIG_FIELDS = ("server", "port", "user")
 
 DEFAULT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent.parent / "templates" / "pc_invitation.txt"
 
@@ -130,10 +125,11 @@ class EmailPreparer:
 class EmailSender:
     """Send emails via SMTP."""
 
-    def __init__(self, server: str, port: int, user: str):
+    def __init__(self, server: str, port: int, user: str, security: str = "ssl"):
         self.server = server
         self.port = port
         self.user = user
+        self.security = security.strip().lower()
 
     def send_email(self, to: str, subject: str, body: str, password: str) -> bool:
         """
@@ -150,10 +146,24 @@ class EmailSender:
 
             msg.attach(MIMEText(body, "plain"))
 
-            # Use SSL/TLS on port 465
-            with smtplib.SMTP_SSL(self.server, self.port) as server:
-                server.login(self.user, password)
-                server.send_message(msg)
+            if self.security in {"ssl", "ssl/tls", "tls"}:
+                with smtplib.SMTP_SSL(self.server, self.port) as server:
+                    server.login(self.user, password)
+                    server.send_message(msg)
+            elif self.security == "starttls":
+                with smtplib.SMTP(self.server, self.port) as server:
+                    server.starttls()
+                    server.login(self.user, password)
+                    server.send_message(msg)
+            elif self.security == "plain":
+                with smtplib.SMTP(self.server, self.port) as server:
+                    server.login(self.user, password)
+                    server.send_message(msg)
+            else:
+                raise ValueError(
+                    "Unsupported email security mode in .email_config. "
+                    "Use one of: ssl, starttls, plain"
+                )
 
             return True
         except Exception as e:
@@ -238,21 +248,103 @@ def ask_confirmation() -> bool:
             print("Please answer 'yes' or 'no'.")
 
 
-def get_password() -> str:
+def _parse_email_config_file(config_path: Path) -> dict[str, str]:
+    config: dict[str, str] = {}
+    with config_path.open("r", encoding="utf-8") as f:
+        for line_number, line in enumerate(f, start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if ":" not in stripped:
+                raise ValueError(
+                    f"Invalid line in {config_path} at line {line_number}: '{stripped}'. "
+                    "Expected 'key: value'."
+                )
+
+            key, value = stripped.split(":", 1)
+            key = key.strip().lower()
+            value = value.strip()
+
+            if value.startswith(("'", '"')) and value.endswith(("'", '"')) and len(value) >= 2:
+                value = value[1:-1]
+
+            config[key] = value
+
+    return config
+
+
+def load_email_config(config_path: Path = EMAIL_CONFIG_PATH) -> dict[str, Any]:
+    if not config_path.exists():
+        raise FileNotFoundError(str(config_path))
+
+    config = _parse_email_config_file(config_path)
+    missing = [field for field in REQUIRED_EMAIL_CONFIG_FIELDS if not config.get(field)]
+    if missing:
+        raise ValueError(
+            f"Missing required fields in {config_path}: {', '.join(missing)}"
+        )
+
+    placeholder_values = {
+        "server": {"smtp.example.com"},
+        "user": {"your-email@example.com"},
+    }
+    for field, placeholders in placeholder_values.items():
+        if config[field].strip().lower() in placeholders:
+            raise ValueError(
+                f"Field '{field}' in {config_path} still has a placeholder value."
+            )
+
+    try:
+        port = int(config["port"])
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid port value in {config_path}: '{config['port']}'. Expected integer."
+        ) from exc
+
+    if port <= 0:
+        raise ValueError(f"Invalid port value in {config_path}: {port}. Expected positive integer.")
+
+    security = config.get("security", "ssl").strip().lower()
+
+    return {
+        "server": config["server"],
+        "port": port,
+        "user": config["user"],
+        "security": security,
+    }
+
+
+def print_email_config_setup_help(config_path: Path = EMAIL_CONFIG_PATH) -> None:
+    print("Email configuration is missing or invalid.")
+    print(f"Create this file and fill in your SMTP details: {config_path}")
+    print("\nExample:")
+    print("server: smtp.example.com")
+    print("port: 465")
+    print("user: your-email@example.com")
+    print("security: ssl")
+    print("\nSupported security values: ssl, starttls, plain")
+
+
+def get_password(email_config: dict[str, Any]) -> str:
     """Prompt user for email password securely."""
-    return getpass(f"Enter password for {EMAIL_CONFIG['user']}: ")
+    return getpass(f"Enter password for {email_config['user']}: ")
 
 
 def send_emails(
-    emails: list[dict[str, str]], password: str, logger: EmailLogger
-) -> tuple[int, int, int]:
+    emails: list[dict[str, str]], password: str, logger: EmailLogger, email_config: dict[str, Any]
+) -> tuple[int, int]:
     """
     Send all emails.
 
     Returns:
-        Tuple of (sent_count, skipped_count, failed_count)
+        Tuple of (sent_count, failed_count)
     """
-    sender = EmailSender(EMAIL_CONFIG["server"], EMAIL_CONFIG["port"], EMAIL_CONFIG["user"])
+    sender = EmailSender(
+        email_config["server"],
+        email_config["port"],
+        email_config["user"],
+        email_config["security"],
+    )
 
     sent_count = 0
     failed_count = 0
@@ -309,6 +401,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Main entry point."""
     args = parse_args(argv)
 
+    try:
+        email_config = load_email_config()
+    except (FileNotFoundError, ValueError) as exc:
+        print_email_config_setup_help()
+        print(f"\nDetails: {exc}", file=sys.stderr)
+        return 1
+
     # Create log directory if it doesn't exist
     args.log_dir.mkdir(parents=True, exist_ok=True)
     log_path = args.log_dir / f"email_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -316,7 +415,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     logger.log(f"Starting email campaign for tag: {args.tag}")
     logger.log(f"Using template: {args.template}")
-    logger.log(f"Email configuration: {EMAIL_CONFIG['user']} @ {EMAIL_CONFIG['server']}")
+    logger.log(f"Email configuration: {email_config['user']} @ {email_config['server']}")
 
     try:
         # Load data
@@ -368,11 +467,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         # Get password from user
         print()
-        password = get_password()
+        password = get_password(email_config)
 
         # Send emails
         print(f"\nSending {len(emails)} emails...")
-        sent_count, failed_count = send_emails(emails, password, logger)
+        sent_count, failed_count = send_emails(emails, password, logger, email_config)
 
         # Print summary
         print("\n" + "=" * 70)

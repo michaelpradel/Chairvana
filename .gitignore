@@ -2,6 +2,7 @@ data/*
 .openai_token
 .openai_token_cispa
 .openai_token_michael
+.email_config
 __pycache__*
 logs/*
 *.csv
