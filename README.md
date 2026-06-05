@@ -1,6 +1,8 @@
 # Chairvana: Where PC Chairs Reach Nirvana
 
-Chairvana supports chairs of program committees (PCs) of academic conferences. It offers support for finding PC members and managing their information and areas of expertise.
+Chairvana supports program committee chairs of academic conferences. It offers support for finding PC members and managing their information and areas of expertise.
+
+![screenshot](figs/screenshot.png)
 
 ## Installation
 
@@ -20,20 +22,29 @@ Chairvana supports chairs of program committees (PCs) of academic conferences. I
 
 The heart of Chairvana is a data repository, which contains information about researchers, such as their name, affiliation, email, personal website, and areas of expertise, as well as information about papers. The data store is implemented as a Git repository in `data/people_store`. 
 
-### Starting from an Existing Data Repository
+### Option 1: Starting from an Existing Data Repository
 
+The easiest option is to start from an existing data repository, such as [this software engineering-focused data store that was created for gathering the FSE'27 PC](https://github.com/michaelpradel/Chairvana-data-SE).
+To use it, simply clone it into `data/people_store`:
 
-### Initializing the People Store from Scratch
+```
+git clone https://github.com/michaelpradel/Chairvana-data-SE.git data/people_store
+```
 
+### Option 2: Initializing the People Store from Scratch
 
+Alternatively, you can create a new data store from scratch. This is recommended for using Chairvana in a different research community or to ensure that all data is freshly collected from the web.
+To initialize the data store from scratch, create an empty Git repository and clone it into `data/people_store`.
+The repository can be local or remote (e.g., on GitHub). For example, to use a local repository, run:
 
-To set up the people store:
+```
+mkdir data/people_store
+cd data/people_store
+git init
+cd ../..
+```
 
-2. Clone a data repository (if you have one), e.g.,:
-	```
-	git clone https://github.com/michaelpradel/Chairvana-fse2027-data.git data/people_store
-	```
-
+To fill the data store with information about researchers, use the web UI or command-line tools, as described below.
 
 ## Web UI
 
