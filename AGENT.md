@@ -39,7 +39,7 @@ Goals:
 ## Global Invariants (Do Not Break)
 1. All people store reads/writes go through DataStore.
 - Use [src/util/data_store.py](src/util/data_store.py).
-- Do not directly read/write JSONL store files in [data/.people_repo/](data/.people_repo/).
+- Do not directly read/write JSONL store files in [data/people_store/](data/people_store/).
 - Do not bypass DataStore with ad-hoc file I/O for people/expertise data.
 
 2. Person identity is name-based.
@@ -47,7 +47,7 @@ Goals:
 - Any rename must go through methods that preserve uniqueness checks.
 
 3. Writes are commit-backed in a local git repo.
-- The canonical mutable store is under [data/.people_repo/](data/.people_repo/).
+- The canonical mutable store is under [data/people_store/](data/people_store/).
 - DataStore write operations commit automatically.
 - Historical edit mode uses base_commit and may reset the people repo work tree to that snapshot before writing.
 
@@ -64,13 +64,13 @@ Goals:
 
 ## Data Layout
 - People + embeddings store (git-backed):
-  - [data/.people_repo/people.jsonl](data/.people_repo/people.jsonl)
-  - [data/.people_repo/expertise_embeddings.jsonl](data/.people_repo/expertise_embeddings.jsonl)
-  - [data/.people_repo/paper_expertise_embeddings.jsonl](data/.people_repo/paper_expertise_embeddings.jsonl)
+  - [data/people_store/people.jsonl](data/people_store/people.jsonl)
+  - [data/people_store/expertise_embeddings.jsonl](data/people_store/expertise_embeddings.jsonl)
+  - [data/people_store/paper_expertise_embeddings.jsonl](data/people_store/paper_expertise_embeddings.jsonl)
 - DBLP inputs/cache:
   - [data/dblp_20260318.xml.gz](data/dblp_20260318.xml.gz) (raw dump)
   - [data/dblp.dtd](data/dblp.dtd)
-  - [data/.people_repo/dblp_filtered.jsonl](data/.people_repo/dblp_filtered.jsonl) (filtered snapshot for queries)
+  - [data/people_store/dblp_filtered.jsonl](data/people_store/dblp_filtered.jsonl) (filtered snapshot for queries)
   - [data/main_track_venues.json](data/main_track_venues.json)
 - Expertise gap index cache:
   - [data/expertise_gap_paper_matrix_index.npz](data/expertise_gap_paper_matrix_index.npz)
@@ -134,5 +134,5 @@ Goals:
 
 ## Out Of Scope For Quick Fixes
 - Do not rewrite the storage layer away from DataStore in routine feature tasks.
-- Do not directly mutate git metadata inside [data/.people_repo/](data/.people_repo/) except through DataStore methods.
+- Do not directly mutate git metadata inside [data/people_store/](data/people_store/) except through DataStore methods.
 - Do not silently broaden venue scope without updating all dependent analyses and UI assumptions.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Send PC invitation emails to people with a specific tag.
+"""Send templated emails to people with a specific tag.
 
 This script retrieves people with a given tag from the data store,
-generates personalized invitation emails from a template, and sends them
+generates personalized emails from a selected template, and sends them
 via SMTP. It shows sample emails before sending and logs all activity.
 """
 
@@ -38,7 +38,7 @@ EMAIL_CONFIG = {
     "security": "SSL/TLS",
 }
 
-TEMPLATE_PATH = Path(__file__).resolve().parent.parent.parent / "templates" / "pc_invitation.txt"
+DEFAULT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent.parent / "templates" / "pc_invitation.txt"
 
 
 class EmailPreparer:
@@ -283,11 +283,18 @@ def send_emails(
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Send PC invitation emails to people with a specific tag."
+        description="Send templated emails to people with a specific tag."
     )
     parser.add_argument(
-        "tag",
+        "--tag",
+        required=True,
         help='Tag to filter people (e.g., "#inviter1" or "inviter1")',
+    )
+    parser.add_argument(
+        "--template",
+        type=Path,
+        default=DEFAULT_TEMPLATE_PATH,
+        help=f"Template file to use (default: {DEFAULT_TEMPLATE_PATH})",
     )
     parser.add_argument(
         "--log-dir",
@@ -304,10 +311,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Create log directory if it doesn't exist
     args.log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = args.log_dir / f"email_pc_invitation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    log_path = args.log_dir / f"email_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     logger = EmailLogger(log_path)
 
     logger.log(f"Starting email campaign for tag: {args.tag}")
+    logger.log(f"Using template: {args.template}")
     logger.log(f"Email configuration: {EMAIL_CONFIG['user']} @ {EMAIL_CONFIG['server']}")
 
     try:
@@ -323,7 +331,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"\nFound {len(people)} people with tag: {args.tag}")
 
         # Prepare emails
-        preparer = EmailPreparer(TEMPLATE_PATH)
+        preparer = EmailPreparer(args.template)
         emails = []
         skipped_people = []
 

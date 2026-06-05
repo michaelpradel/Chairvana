@@ -9,18 +9,31 @@ Chairvana supports chairs of program committees (PCs) of academic conferences. I
 	git clone https://github.com/michaelpradel/Chairvana.git
 	cd Chairvana
 	```
-
-2. Clone a data repository (if you have one), e.g.,:
-	```
-	git clone https://github.com/michaelpradel/Chairvana-fse2027-data.git data/.people_repo
-	```
-
-3. Install dependencies:
+2. Install dependencies:
 	```
 	pip install -r requirements.txt
 	```
 
-4. Optionally, to use features based on semantic embeddings of expertise, add an OpenAI API key into file `.openai_token`.
+3. Optionally, to use LLM-based features, such as auto-completing information (e.g., email, personal website, gender or potential PC members) and features based on semantic embeddings of expertise (e.g., to find reseachers with specific expertise), add an OpenAI API key into file `.openai_token`.
+
+## Setting Up the Data Repository
+
+The heart of Chairvana is a data repository, which contains information about researchers, such as their name, affiliation, email, personal website, and areas of expertise, as well as information about papers. The data store is implemented as a Git repository in `data/people_store`. 
+
+### Starting from an Existing Data Repository
+
+
+### Initializing the People Store from Scratch
+
+
+
+To set up the people store:
+
+2. Clone a data repository (if you have one), e.g.,:
+	```
+	git clone https://github.com/michaelpradel/Chairvana-fse2027-data.git data/people_store
+	```
+
 
 ## Web UI
 
@@ -57,10 +70,9 @@ Querying the full `data/dblp.xml.gz` can be slow. Create a filtered JSONL snapsh
 python src/util/query_dblp.py --preprocess
 ```
 
-This writes `data/.people_repo/dblp_filtered.jsonl` containing only:
+This writes `data/people_store/dblp_filtered.jsonl` containing only:
 
 - publication types: `inproceedings`, `article`
 - venues (by DBLP key prefix): `conf/icse`, `conf/sigsoft`, `conf/kbse`, `conf/issta`, `conf/oopsla`
 
-After preprocessing, normal `src/query_dblp.py` queries automatically use `data/.people_repo/dblp_filtered.jsonl` when present.
-
+After preprocessing, normal `src/query_dblp.py` queries automatically use `data/people_store/dblp_filtered.jsonl` when present.

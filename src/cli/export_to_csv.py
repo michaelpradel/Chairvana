@@ -130,8 +130,8 @@ if __name__ == '__main__':
     parser.add_argument(
         'jsonl_path',
         nargs='?',
-        default='data/.people_repo/people.jsonl',
-        help='Path to the people.jsonl file (default: data/.people_repo/people.jsonl)'
+        default='data/people_store/people.jsonl',
+        help='Path to the people.jsonl file (default: data/people_store/people.jsonl)'
     )
     
     parser.add_argument(

@@ -1,7 +1,7 @@
 """Utilities for reading and updating JSONL stores in the data repository.
 
 This module is the single point of entry for writes to store-managed files
-inside the local data git repository under ``data/.people_repo``.
+inside the local data git repository under ``data/people_store``.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-DEFAULT_PEOPLE_REPO_DIRNAME = ".people_repo"
+DEFAULT_PEOPLE_REPO_DIRNAME = "people_store"
 DEFAULT_PEOPLE_REPO_PATH = Path(__file__).resolve().parent.parent.parent / "data" / DEFAULT_PEOPLE_REPO_DIRNAME
 DEFAULT_PEOPLE_PATH = DEFAULT_PEOPLE_REPO_PATH / "people.jsonl"
 DEFAULT_EXPERTISE_EMBEDDINGS_PATH = DEFAULT_PEOPLE_REPO_PATH / "expertise_embeddings.jsonl"
@@ -955,7 +955,7 @@ class DataStore:
         if self._is_ancestor(remote_head, local_head):
             return
         raise RemoteConflictError(
-            "Local data history has diverged from the remote. Please inspect data/.people_repo before editing."
+            "Local data history has diverged from the remote. Please inspect data/people_store before editing."
         )
 
     def _current_head_commit(self) -> str | None:

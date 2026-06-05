@@ -1,7 +1,7 @@
 """Preprocess and query a reduced DBLP JSONL snapshot.
 
 This module supports two operations:
-1. One-time preprocessing from ``data/dblp.xml.gz`` to ``data/.people_repo/dblp_filtered.jsonl``.
+1. One-time preprocessing from ``data/dblp.xml.gz`` to ``data/people_store/dblp_filtered.jsonl``.
 2. Querying publications by author from the filtered JSONL only.
 """
 
@@ -274,7 +274,7 @@ class DblpQueryEngine:
         self.filtered_jsonl_path = (
             Path(filtered_jsonl_path)
             if filtered_jsonl_path is not None
-            else base_dir / "data" / ".people_repo" / "dblp_filtered.jsonl"
+            else base_dir / "data" / "people_store" / "dblp_filtered.jsonl"
         )
         if not self.filtered_jsonl_path.exists():
             raise FileNotFoundError(f"Missing filtered DBLP JSONL: {self.filtered_jsonl_path}")
@@ -711,7 +711,7 @@ def create_publication_summary(
         person_name: The person's name to search for in DBLP
         current_year: The year to use as reference (default: current year)
         max_years_back: How many years back to include (default: 5)
-        filtered_jsonl_path: Path to filtered DBLP JSONL (default: data/.people_repo/dblp_filtered.jsonl)
+        filtered_jsonl_path: Path to filtered DBLP JSONL (default: data/people_store/dblp_filtered.jsonl)
         engine: Existing query engine to reuse instead of rebuilding the index
 
     Returns:
@@ -814,7 +814,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--filtered-jsonl",
         type=Path,
         default=None,
-        help="Path to filtered DBLP JSONL cache (default: data/.people_repo/dblp_filtered.jsonl)",
+        help="Path to filtered DBLP JSONL cache (default: data/people_store/dblp_filtered.jsonl)",
     )
     parser.add_argument(
         "--preprocess",
@@ -874,7 +874,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     filtered_jsonl_path = (
         args.filtered_jsonl
         if args.filtered_jsonl is not None
-        else base_dir / "data" / ".people_repo" / "dblp_filtered.jsonl"
+        else base_dir / "data" / "people_store" / "dblp_filtered.jsonl"
     )
 
     if args.preprocess:
